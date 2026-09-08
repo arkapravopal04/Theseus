@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "partdiff"
+version = "0.1.0"
+description = "Diff and preview STEP/IGES/BREP/STL CAD files without needing CAD software."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "cadquery-ocp==8.0.1.0.0",
+    "numpy",
+    "trimesh",
+    "matplotlib",
+]
+
+[project.urls]
+Repository = "https://github.com/arkapravopal04/theseus"
+
+[project.scripts]
+partdiff = "partdiff.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["partdiff*"]

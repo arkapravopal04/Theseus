@@ -14,16 +14,9 @@ anything actually changed. This gives a numeric summary — did the volume
 change, did the bounding box change, did a solid get added or removed —
 straight in the PR, for anyone, with no CAD software installed.
 
-## CLI usage
+## Install
 
-```bash
-pip install -r requirements.txt
-python -m partdiff old.step new.step --out report.md --png preview.png
-```
-
-`old` may be omitted to just report on a single (new) file.
-
-## Use as a GitHub Action
+**As a GitHub Action** — drop this in `.github/workflows/partdiff.yml`:
 
 ```yaml
 name: partdiff
@@ -42,8 +35,24 @@ jobs:
       - uses: arkapravopal04/theseus@v1
 ```
 
-`fetch-depth: 0` is required: without full history, the base commit isn't in
-the checkout and the diff can't read the old version of the file.
+That's the whole setup — no other config. `fetch-depth: 0` is required:
+without full history, the base commit isn't in the checkout and the diff
+can't read the old version of the file. Every PR that touches a CAD file
+gets an automatic comment with the volume/bounding-box/centre-of-mass diff.
+
+**As a CLI** — installs straight from GitHub, no cloning needed:
+
+```bash
+pip install git+https://github.com/arkapravopal04/theseus.git
+```
+
+```bash
+partdiff old.step new.step --out report.md --png preview.png
+```
+
+`old` may be omitted to just report on a single (new) file. `--glb` also
+exports a `.glb` mesh — commit it to GitHub for a free interactive
+rotate/zoom viewer, no CAD software needed.
 
 ## How it works
 
