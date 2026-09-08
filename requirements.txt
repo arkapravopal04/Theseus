@@ -1,0 +1,4 @@
+cadquery-ocp==8.0.1.0.0  # pin: verify with `pip index versions cadquery-ocp` before bumping
+numpy
+trimesh
+matplotlib
