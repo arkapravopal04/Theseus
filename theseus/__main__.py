@@ -1,5 +1,5 @@
 import sys
 
-from partdiff.cli import main
+from theseus.cli import main
 
 sys.exit(main())

@@ -14,7 +14,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
-from partdiff.mesh import extract_mesh  # noqa: E402
+from theseus.mesh import extract_mesh  # noqa: E402
 from OCP.TopoDS import TopoDS_Shape  # noqa: E402
 
 

@@ -1,4 +1,4 @@
-name: 'partdiff'
+name: 'theseus'
 description: 'Post a volume/bounding-box diff comment on PRs that change STEP/IGES/BREP/STL CAD files'
 branding:
   icon: 'box'

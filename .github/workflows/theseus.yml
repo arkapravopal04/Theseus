@@ -1,4 +1,4 @@
-name: partdiff
+name: theseus
 on:
   pull_request:
     paths: ['**.step', '**.stp', '**.iges', '**.igs', '**.brep', '**.brp', '**.stl']

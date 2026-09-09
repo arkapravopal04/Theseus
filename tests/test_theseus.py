@@ -3,11 +3,11 @@ import os
 import pytest
 import trimesh
 
-from partdiff.compare import build_report, diff_one_file
-from partdiff.export import export_mesh
-from partdiff.load import LoadError, load_shape
-from partdiff.mesh import extract_mesh
-from partdiff.metrics import compute_metrics
+from theseus.compare import Thresholds, build_report, diff_one_file
+from theseus.export import export_mesh
+from theseus.load import LoadError, load_shape
+from theseus.mesh import extract_mesh
+from theseus.metrics import compute_metrics
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -108,6 +108,39 @@ def test_diff_changed_volume():
     assert "Volume" in section
 
 
+def test_tiny_volume_change_is_reported_not_masked_by_absolute_floor():
+    """Regression test: volume_mm3 is a cubic quantity, so its noise floor must be derived in
+    mm^3 terms (abs_mm ** 3), not reused as the raw mm constant. Applying 0.01mm directly as a
+    0.01mm^3 floor would mask a large, real relative change on a small part."""
+    old = {"volume_mm3": 0.001, "bbox": (0, 0, 0, 1, 1, 1), "com": (0.5, 0.5, 0.5), "solid_count": 1}
+    new = {"volume_mm3": 0.006, "bbox": (0, 0, 0, 1, 1, 1), "com": (0.5, 0.5, 0.5), "solid_count": 1}
+    section = diff_one_file("tiny.step", old, new)
+    assert "Volume" in section
+    assert "no significant change" not in section
+
+
+def test_below_threshold_volume_delta_is_noted_not_hidden():
+    """A real but sub-threshold delta should stay classified as unchanged, but be visible in
+    the report rather than looking identical to a file with zero delta at all."""
+    old = {"volume_mm3": 8000.0, "bbox": (0, 0, 0, 20, 20, 20), "com": (10, 10, 10), "solid_count": 1}
+    new = {"volume_mm3": 8000.0 + 1e-4, "bbox": (0, 0, 0, 20, 20, 20), "com": (10, 10, 10), "solid_count": 1}
+    section = diff_one_file("part.step", old, new)
+    assert "no significant change" in section
+    assert "below noise threshold" in section
+
+
+def test_custom_thresholds_change_sensitivity():
+    old = {"volume_mm3": 8000.0, "bbox": (0, 0, 0, 20, 20, 20), "com": (10, 10, 10), "solid_count": 1}
+    new = {"volume_mm3": 8001.0, "bbox": (0, 0, 0, 20, 20, 20), "com": (10, 10, 10), "solid_count": 1}
+
+    default_section = diff_one_file("part.step", old, new)
+    assert "no significant change" in default_section
+
+    tight = Thresholds(abs_mm=0.01, rel=0.0001)
+    tight_section = diff_one_file("part.step", old, new, tight)
+    assert "Volume" in tight_section
+
+
 def test_build_report_empty():
     report = build_report({})
     assert "No CAD file changes" in report
@@ -158,5 +191,5 @@ def test_build_report_with_changes():
     old = compute_metrics(load_shape(fixture("cube20.step")))
     new = compute_metrics(load_shape(fixture("bracket_fillets.step")))
     report = build_report({"part.step": (old, new)})
-    assert "partdiff report" in report
+    assert "theseus report" in report
     assert "part.step" in report

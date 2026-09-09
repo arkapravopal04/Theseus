@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import trimesh
 
-from partdiff.mesh import extract_mesh
+from theseus.mesh import extract_mesh
 from OCP.TopoDS import TopoDS_Shape
 
 

@@ -14,9 +14,9 @@ import subprocess
 import sys
 import tempfile
 
-from partdiff.compare import build_report
-from partdiff.load import CAD_EXTENSIONS, LoadError, load_shape
-from partdiff.metrics import compute_metrics
+from theseus.compare import build_report
+from theseus.load import CAD_EXTENSIONS, LoadError, load_shape
+from theseus.metrics import compute_metrics
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")

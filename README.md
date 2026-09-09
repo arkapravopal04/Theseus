@@ -1,6 +1,6 @@
-# partdiff
+# theseus
 
-See what changed in a CAD file without opening CAD software. `partdiff` reads
+See what changed in a CAD file without opening CAD software. `theseus` reads
 STEP/IGES/BREP/STL files with the OpenCascade geometry kernel, computes volume /
 bounding box / centre of mass / solid count, and reports the difference
 between two versions — as a CLI, or as an automatic comment on pull requests
@@ -16,10 +16,10 @@ straight in the PR, for anyone, with no CAD software installed.
 
 ## Install
 
-**As a GitHub Action** — drop this in `.github/workflows/partdiff.yml`:
+**As a GitHub Action** — drop this in `.github/workflows/theseus.yml`:
 
 ```yaml
-name: partdiff
+name: theseus
 on:
   pull_request:
     paths: ['**.step', '**.stp', '**.iges', '**.igs', '**.brep', '**.brp', '**.stl']
@@ -47,7 +47,7 @@ pip install git+https://github.com/arkapravopal04/theseus.git
 ```
 
 ```bash
-partdiff old.step new.step --out report.md --png preview.png
+theseus old.step new.step --out report.md --png preview.png
 ```
 
 `old` may be omitted to just report on a single (new) file. `--glb` also
@@ -78,7 +78,7 @@ rotate/zoom viewer, no CAD software needed.
 - **"Volume", not "mass".** There's no density information in a STEP file, so nothing here
   is a mass or weight calculation.
 - **No Git LFS.** If your CAD files are stored in LFS, the checkout only contains pointer
-  files unless LFS is explicitly fetched; partdiff detects this and skips the file with a
+  files unless LFS is explicitly fetched; theseus detects this and skips the file with a
   note rather than reporting garbage.
 - **Small changes are treated as noise.** Differences under 0.01mm or 0.1% are not reported,
   to avoid flagging tessellation/floating-point wobble as a real change.

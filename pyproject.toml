@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "partdiff"
+name = "theseus"
 version = "0.1.0"
 description = "Diff and preview STEP/IGES/BREP/STL CAD files without needing CAD software."
 readme = "README.md"
@@ -20,7 +20,7 @@ dependencies = [
 Repository = "https://github.com/arkapravopal04/theseus"
 
 [project.scripts]
-partdiff = "partdiff.cli:main"
+theseus = "theseus.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["partdiff*"]
+include = ["theseus*"]
