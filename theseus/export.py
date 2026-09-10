@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import trimesh
+from trimesh.visual.material import PBRMaterial
 
 from theseus.mesh import extract_mesh
 from OCP.TopoDS import TopoDS_Shape
@@ -55,4 +56,18 @@ def export_mesh(shape: TopoDS_Shape, out_path: str, deflection: float = 0.5) -> 
     # material's N.L term is zero everywhere and the model renders solid black
     # regardless of light intensity.
     mesh.vertex_normals = _flat_vertex_normals(vertices, faces)
+    # Without an explicit material, glTF's spec-mandated default is fully metallic
+    # (metallicFactor=1). Metallic surfaces have no diffuse term — they only show
+    # environment reflections — so in any viewer that doesn't set up environment/IBL
+    # lighting (GitHub's built-in viewer included), the model renders solid black or
+    # invisible even though punctual lights are present. A plain, non-metallic
+    # material makes it visible everywhere.
+    mesh.visual = trimesh.visual.TextureVisuals(
+        material=PBRMaterial(
+            baseColorFactor=[200, 200, 200, 255],
+            metallicFactor=0.0,
+            roughnessFactor=0.6,
+            doubleSided=True,
+        )
+    )
     mesh.export(out_path)
