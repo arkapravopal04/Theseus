@@ -11,6 +11,8 @@ sets these):
   THESEUS_TIMEOUT      seconds allowed to load one file version (default 300)
   THESEUS_MAX_FILE_MB  skip files bigger than this (default 50)
   THESEUS_UNITS        length unit of unitless formats like STL (default: assume mm)
+  THESEUS_SENSITIVITY  engineering (default) | fine | exact — how big a difference must be to
+                       be called "changed" rather than a micro-change
 Actions itself provides GITHUB_REPOSITORY, GITHUB_STEP_SUMMARY, GITHUB_SERVER_URL, GITHUB_RUN_ID.
 """
 
@@ -21,9 +23,9 @@ import subprocess
 import sys
 import tempfile
 
-from theseus.compare import REPORT_MARKER, build_report
+from theseus.compare import DEFAULT_THRESHOLDS, REPORT_MARKER, SENSITIVITY, Thresholds, build_report
 from theseus.gitops import ZERO_SHA, Change, changed_files, materialize, merge_base
-from theseus.isolate import DEFAULT_TIMEOUT_S, NotCADError, metrics_isolated
+from theseus.isolate import DEFAULT_TIMEOUT_S, analyze_isolated
 from theseus.model import LoadError
 
 try:
@@ -35,7 +37,7 @@ DEFAULT_MAX_FILE_MB = 50
 # GitHub rejects comment bodies over 65,536 characters; leave room for the overflow note.
 COMMENT_BUDGET = 60_000
 
-Results = dict[str, tuple[dict | None, dict | None]]
+Results = dict[str, tuple[dict | None, dict | None, dict | None]]  # old, new, precise
 
 
 def _log(msg: str) -> None:
@@ -76,11 +78,12 @@ def analyze(
                 errors.append(str(e))
                 continue
 
-            try:
-                old_metrics, old_err = metrics_isolated(old_file, timeout, units) if old_file else (None, None)
-                new_metrics, new_err = metrics_isolated(new_file, timeout, units) if new_file else (None, None)
-            except NotCADError:
+            if old_file is None and new_file is None:
+                continue
+            result = analyze_isolated(old_file, new_file, timeout, units)
+            if result["not_cad"]:
                 continue  # e.g. a compiled .obj object file: not ours to report on
+            old_err, new_err = result["old_error"], result["new_error"]
 
             # Messages name the temp copy; point them at the file in the repo instead.
             if old_err:
@@ -89,25 +92,29 @@ def analyze(
                 errors.append(f"{change.path} (new version): {new_err.replace(new_file, change.path)}")
             # A version that exists but failed to load must not read as "new file"/"deleted":
             # report the file only under Skipped.
-            if old_err or new_err or (old_metrics is None and new_metrics is None):
+            if old_err or new_err or (result["old"] is None and result["new"] is None):
                 continue
-            results[change.path] = (old_metrics, new_metrics)
+            if result["precise_error"]:
+                errors.append(f"{change.path}: {result['precise_error']} — showing metrics only")
+            results[change.path] = (result["old"], result["new"], result["precise"])
             if change.status == "R":
                 renamed_from[change.path] = change.old_path
 
     return results, renamed_from, errors
 
 
-def render_report(results: Results, renamed_from: dict[str, str], errors: list[str]) -> str:
-    report = build_report(results, renamed_from=renamed_from)
+def render_report(results: Results, renamed_from: dict[str, str], errors: list[str],
+                  thresholds: Thresholds = DEFAULT_THRESHOLDS) -> str:
+    report = build_report(results, thresholds, renamed_from)
     if errors:
         report += "\n### Skipped\n" + "\n".join(f"- {e}" for e in errors) + "\n"
     return report
 
 
-def fit_comment(results: Results, renamed_from: dict[str, str], errors: list[str], run_url: str | None) -> str:
+def fit_comment(results: Results, renamed_from: dict[str, str], errors: list[str], run_url: str | None,
+                thresholds: Thresholds = DEFAULT_THRESHOLDS) -> str:
     """The report, trimmed file by file to fit in a PR comment when a change touches many files."""
-    report = render_report(results, renamed_from, errors)
+    report = render_report(results, renamed_from, errors, thresholds)
     if len(report) <= COMMENT_BUDGET:
         return report
 
@@ -115,7 +122,7 @@ def fit_comment(results: Results, renamed_from: dict[str, str], errors: list[str
     where = f"the [workflow run's job summary]({run_url})" if run_url else "the workflow run's job summary"
     for keep in range(len(paths) - 1, -1, -1):
         subset = {p: results[p] for p in paths[:keep]}
-        trimmed = render_report(subset, renamed_from, errors[:20])
+        trimmed = render_report(subset, renamed_from, errors[:20], thresholds)
         trimmed += f"\n*…and {len(paths) - keep} more file(s) — full report in {where}.*\n"
         if len(trimmed) <= COMMENT_BUDGET:
             return trimmed
@@ -161,13 +168,19 @@ def main() -> int:
         _log("is the checkout shallow? actions/checkout needs `fetch-depth: 0`")
         return 0
 
+    sensitivity = os.environ.get("THESEUS_SENSITIVITY") or "engineering"
+    if sensitivity not in SENSITIVITY:
+        _log(f"unknown sensitivity {sensitivity!r} (expected one of {', '.join(SENSITIVITY)}); using engineering")
+        sensitivity = "engineering"
+    thresholds = SENSITIVITY[sensitivity]
+
     results, renamed_from, errors = analyze(
         changes, base, head,
         timeout=float(os.environ.get("THESEUS_TIMEOUT") or DEFAULT_TIMEOUT_S),
         max_bytes=int(float(os.environ.get("THESEUS_MAX_FILE_MB") or DEFAULT_MAX_FILE_MB) * 1024 * 1024),
         units=os.environ.get("THESEUS_UNITS") or None,
     )
-    report = render_report(results, renamed_from, errors)
+    report = render_report(results, renamed_from, errors, thresholds)
     print(report)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -185,7 +198,7 @@ def main() -> int:
     try:
         # With nothing to report, only refresh an earlier comment (the CAD change may have
         # been reverted) — never open a new one.
-        upsert_comment(repo, pr, fit_comment(results, renamed_from, errors, run_url),
+        upsert_comment(repo, pr, fit_comment(results, renamed_from, errors, run_url, thresholds),
                        create=bool(results or errors))
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         # Fork PRs get a read-only token, so this 403s — expected, not a failure.

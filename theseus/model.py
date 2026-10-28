@@ -33,6 +33,9 @@ class Model:
     # report never silently presents an assumption as a fact.
     units: str = "mm"
     units_note: str = ""
+    # Size of one of the file's own length units in mm (25.4 for an inch file). Lets
+    # precision figures written in the file's units be converted.
+    mm_per_file_unit: float = 1.0
     warnings: list[str] = field(default_factory=list)
     # Meshes only: connected components, each closed body already oriented outward.
     bodies: list[trimesh.Trimesh] = field(default_factory=list)

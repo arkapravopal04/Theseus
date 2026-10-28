@@ -27,10 +27,19 @@ def extract_mesh(source: Model | TopoDS_Shape, deflection: float = 0.5) -> tuple
     if isinstance(source, Model) and source.kind == "mesh":
         return np.asarray(source.mesh.vertices, dtype=float), np.asarray(source.mesh.faces, dtype=int)
     shape = source.shape if isinstance(source, Model) else source
+    vertices, faces, _, _ = tessellate(shape, deflection)
+    return vertices, faces
+
+
+def tessellate(shape: TopoDS_Shape, deflection: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, list]:
+    """Like extract_mesh for a B-rep, plus which B-rep face each triangle came from:
+    (vertices, faces, face_index per triangle, list of TopoDS_Face)."""
     BRepMesh_IncrementalMesh(shape, deflection)
 
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
+    owners: list[int] = []
+    brep_faces: list = []
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
     while exp.More():
@@ -54,9 +63,11 @@ def extract_mesh(source: Model | TopoDS_Shape, deflection: float = 0.5) -> tuple
                     p = tri.Node(idx).Transformed(trsf)
                     vertices.append((p.X(), p.Y(), p.Z()))
                 faces.append((base, base + 1, base + 2))
+                owners.append(len(brep_faces))
+            brep_faces.append(face)
         exp.Next()
 
     if not vertices:
-        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int)
+        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int), np.zeros(0, dtype=int), []
 
-    return np.array(vertices), np.array(faces, dtype=int)
+    return np.array(vertices), np.array(faces, dtype=int), np.array(owners, dtype=int), brep_faces

@@ -26,16 +26,21 @@ from theseus.model import Model
 METRICS_SCHEMA = 2
 
 
-def _volume_props(shape: TopoDS_Shape) -> GProp_GProps:
+# Requested relative accuracy of the volume integral. OCCT's adaptive integration reports the
+# error it actually achieved, which sets how small a volume change can be told from noise.
+VOLUME_EPS = 1e-9
+
+
+def _volume_props(shape: TopoDS_Shape) -> tuple[GProp_GProps, float]:
     props = GProp_GProps()
     # OnlyClosed: an open shell's signed "volume" is an artefact of where its boundary
     # happens to sit, not material — only closed shells contribute.
-    BRepGProp.VolumeProperties_s(shape, props, True)
-    return props
+    rel_error = BRepGProp.VolumeProperties_s(shape, props, VOLUME_EPS, True)
+    return props, abs(rel_error)
 
 
 def volume(shape: TopoDS_Shape) -> float:
-    return _volume_props(shape).Mass()  # for VolumeProperties, "mass" is the volume magnitude
+    return _volume_props(shape)[0].Mass()  # for VolumeProperties, "mass" is the volume magnitude
 
 
 def surface_area(shape: TopoDS_Shape) -> float:
@@ -46,12 +51,14 @@ def surface_area(shape: TopoDS_Shape) -> float:
 
 def bounding_box(shape: TopoDS_Shape) -> tuple[float, float, float, float, float, float]:
     box = Bnd_Box()
-    BRepBndLib.Add_s(shape, box)
+    # The geometry's own extent. The default Add_s pads the box by every sub-shape's tolerance,
+    # so a re-export with different tolerances would look like a size change.
+    BRepBndLib.AddOptimal_s(shape, box, False, False)
     return (box.GetXMin(), box.GetYMin(), box.GetZMin(), box.GetXMax(), box.GetYMax(), box.GetZMax())
 
 
 def center_of_mass(shape: TopoDS_Shape) -> tuple[float, float, float]:
-    com = _volume_props(shape).CentreOfMass()
+    com = _volume_props(shape)[0].CentreOfMass()
     return (com.X(), com.Y(), com.Z())
 
 
@@ -75,7 +82,7 @@ def _brep_metrics(model: Model) -> dict:
     # surface geometry with no enclosed volume.
     open_bodies = _count(shape, TopAbs_SHELL, TopAbs_SOLID) + _count(shape, TopAbs_FACE, TopAbs_SHELL)
 
-    props = _volume_props(shape)
+    props, volume_error = _volume_props(shape)
     vol = props.Mass() if solids else None
     com = None
     if vol:
@@ -93,6 +100,7 @@ def _brep_metrics(model: Model) -> dict:
 
     return {
         "volume_mm3": vol,
+        "volume_rel_error": volume_error,
         "area_mm2": surface_area(shape),
         "bbox": bounding_box(shape),
         "com": com,
@@ -122,6 +130,7 @@ def _mesh_metrics(model: Model) -> dict:
 
     return {
         "volume_mm3": float(vol) if vol is not None else None,
+        "volume_rel_error": 1e-12,  # a closed-form sum over the triangles: float rounding only
         "area_mm2": float(model.mesh.area),
         "bbox": tuple(float(v) for v in model.mesh.bounds.ravel()),
         "com": com,

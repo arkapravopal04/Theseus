@@ -15,6 +15,14 @@ from OCP.TopoDS import TopoDS_Shape
 from theseus.model import LoadError, Model
 
 _MM_SPELLINGS = {"mm", "millimetre", "millimeter", "millimetres", "millimeters"}
+# Checked in order: "millimetre" contains "metre".
+_UNIT_NAME_MM = (("inch", 25.4), ("foot", 304.8), ("feet", 304.8), ("milli", 1.0), ("micro", 1e-3),
+                 ("centi", 10.0), ("kilo", 1e6), ("metre", 1000.0), ("meter", 1000.0), ("mm", 1.0))
+
+
+def _mm_per_unit(file_unit: str | None) -> float:
+    name = (file_unit or "").lower()
+    return next((mm for key, mm in _UNIT_NAME_MM if key in name), 1.0)
 
 
 def _units_note(file_unit: str | None) -> str:
@@ -41,7 +49,8 @@ def load_step(path: str, fmt: str, assume_units: str | None) -> Model:
     lengths = Sequence_TCollection_AsciiString()
     reader.FileUnits(lengths, Sequence_TCollection_AsciiString(), Sequence_TCollection_AsciiString())
     file_unit = next((s.ToCString() for s in lengths), None)
-    return Model(path, fmt, "brep", shape=shape, units_note=_units_note(file_unit))
+    return Model(path, fmt, "brep", shape=shape, units_note=_units_note(file_unit),
+                 mm_per_file_unit=_mm_per_unit(file_unit))
 
 
 def load_iges(path: str, fmt: str, assume_units: str | None) -> Model:
@@ -51,7 +60,8 @@ def load_iges(path: str, fmt: str, assume_units: str | None) -> Model:
         file_unit = reader.IGESModel().GlobalSection().UnitName().ToCString()
     except Exception:  # noqa: BLE001 — a missing/odd global section only costs the note
         file_unit = None
-    return Model(path, fmt, "brep", shape=shape, units_note=_units_note(file_unit))
+    return Model(path, fmt, "brep", shape=shape, units_note=_units_note(file_unit),
+                 mm_per_file_unit=_mm_per_unit(file_unit))
 
 
 def scale_shape(shape: TopoDS_Shape, factor: float) -> TopoDS_Shape:

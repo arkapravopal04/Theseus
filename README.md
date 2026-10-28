@@ -1,16 +1,37 @@
 # theseus
 
-See what changed in a CAD file without opening CAD software. `theseus` reads STEP, IGES,
-BREP, STL, 3MF, OBJ, PLY, OFF and GLB files, computes volume / surface area / bounding box /
-centre of mass / body counts, and reports the difference between two versions — as a CLI, or
-as an automatic, always-current comment on pull requests that touch CAD files.
+See exactly what changed in a CAD file — which face moved, which hole grew, by how many
+microns — without opening CAD software. `theseus` compares two versions of a STEP, IGES,
+BREP, STL, 3MF, OBJ, PLY, OFF or GLB file geometrically, and reports every difference with
+its location and size, down to the precision the files themselves can represent. It runs as
+a CLI, or as an automatic, always-current comment on pull requests that touch CAD files.
+
+```
+### `bracket.step` (changed)
+- Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
+  - cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
+  - 2 vertices moved, added or removed — largest 0.500 mm at (54.500, 25.000, 10.000)
+  - 2 faces with unchanged surfaces re-trimmed by neighbouring changes (largest boundary shift 2.5 µm, plane z = 10.000) *(micro)*
+
+### `plate.step` — micro-change only (largest 1.0 µm, under the 10.0 µm reporting threshold)
+- Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
+  - plane x = 200.0000 → 200.0010 — +1.0 µm *(micro)*
+  ...
+
+### `housing.step` — identical (to within 0.1 nm, exact B-rep)
+- file contents differ but the geometry is identical (re-export or metadata change)
+```
+
+That hole moved 0.5 mm without changing the part's volume or bounding box — a numbers-only
+diff would call it unchanged.
 
 ## Why
 
 Reviewing a CAD file change on GitHub normally means downloading both versions and opening them
-in AutoCAD/Fusion/SolidWorks just to see if anything actually changed. This gives a numeric
-summary — did the volume change, did the bounding box change, did a solid get added or removed,
-is the new geometry even valid — straight in the PR, for anyone, with no CAD software installed.
+in AutoCAD/Fusion/SolidWorks just to see if anything actually changed. `git diff` on a STEP file
+is thousands of lines of entity renumbering. theseus answers the reviewer's real questions —
+did the geometry change, where, and by how much — straight in the PR, for anyone, with no CAD
+software installed.
 
 ## Install
 
@@ -57,6 +78,7 @@ Optional inputs (`with:`):
 
 | Input | Default | |
 |---|---|---|
+| `sensitivity` | `engineering` | When a difference counts as *changed* rather than a *micro-change*: `engineering` (10 µm or 0.1%), `fine` (1 µm or 0.01%), `exact` (anything above the detection limit) |
 | `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
 | `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
 | `max-file-mb` | `50` | Skip files larger than this |
@@ -78,7 +100,35 @@ theseus old.step new.step --out report.md --png preview.png
 
 `old` may be omitted to just report on a single (new) file. `--glb` also exports a `.glb` mesh —
 commit it to GitHub for a free interactive rotate/zoom viewer, no CAD software needed. `--units in`
-declares the unit of unitless formats. The exit status is 2 if a file can't be read or written.
+declares the unit of unitless formats; `--sensitivity fine|exact` tightens what counts as a change.
+The exit status is 2 if a file can't be read or written.
+
+## Precision
+
+Every comparison states its **detection limit**: the smallest difference the two files can
+actually represent. Above it, every difference is reported, with where it is. Below it,
+differences are numerical noise, and a file reads as *identical (to within …)*. A sensitivity
+threshold (10 µm / 0.1% by default) only decides whether a real difference is headlined as
+*changed* or listed as a *micro-change* — it never hides one.
+
+| Comparing | How | Detection limit |
+|---|---|---|
+| STEP/IGES/BREP ↔ STEP/IGES/BREP | every face matched by surface type and exact parameters (plane offset, cylinder axis and diameter, sphere, cone, torus); free-form faces by projection; every vertex by position | 0.1 nm (kernel precision), or coarser if the file declares or was written with less precision — the report says which |
+| STL ↔ STL, same triangulation | per-vertex deltas | float32 storage: ~5 nm at 20 mm |
+| mesh ↔ mesh, different triangulation | distance from each side's vertices to the other's surface, both ways | float precision on flat areas; on curves, each triangle's own chord error |
+| STEP ↔ STL (or any B-rep ↔ mesh) | as above, measured exactly against the B-rep's true surfaces | as above |
+
+Measured by the test suite (`tests/test_precision.py`), all detected and located:
+
+| Change | Found as |
+|---|---|
+| one face of a 200 mm plate offset by 0.1 µm | `plane x = 200.00000 → 200.00010 — +0.1 µm` |
+| a Ø8 hole enlarged by 2 µm | `cylinder along Z Ø8.0000 → 8.0020 … — Ø +2.0 µm` |
+| a hole moved 0.5 mm sideways (volume unchanged) | `… (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm` |
+| the whole part rotated 0.01° | `plane y = 0.000 — tilted 0.01° (far edge moves 35.0 µm)` |
+| one STL vertex moved 1 µm | `surfaces differ by up to 1.0 µm near (…)` |
+| re-exported STEP, same geometry | `identical (to within 0.1 nm, exact B-rep)` |
+| STEP vs its own coarse STL export | identical — the STL's chord error is recognised as tessellation, not a change |
 
 ## Formats and units
 
@@ -103,21 +153,22 @@ format, assumed mm").
 1. `git diff --name-status -M` finds changed CAD files between the PR's merge base and head,
    following renames (a renamed part is diffed against its own history).
 2. Each version is read as a raw blob (`git cat-file`), with Git LFS pointers resolved.
-3. Each version is loaded in its own child process with a timeout — a malformed file that
-   crashes or hangs the geometry kernel becomes one "Skipped" line, not a failed run.
-   Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
-4. The metric sets are diffed and formatted as one markdown comment, edited in place on each push.
+3. Both versions of a file are loaded and compared in a child process with a timeout — a
+   malformed file that crashes or hangs the geometry kernel becomes one "Skipped" line, not a
+   failed run. Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
+4. The geometry is compared face by face (or surface to surface for meshes — see
+   [Precision](#precision)), alongside volume, area, bounding box and centre of mass.
+5. Everything is formatted as one markdown comment, edited in place on each push.
 
 ## Limitations
 
 - **No native CAD formats.** No DWG, SLDPRT, IPT, F3D, CATPart or other proprietary format —
   there's no free reader for them. Export STEP alongside your native files.
-- **Volume-based, not topological.** This compares numbers derived from the geometry, not the
-  geometry itself. Two different parts that happen to have the same volume, bounding box, and
-  centre of mass will be reported as unchanged.
-- **Small changes are treated as noise.** A metric change counts only if it exceeds both 0.01 mm
-  (that length cubed for volume) and 0.1% — tunable with `--abs-threshold-mm` / `--rel-threshold`.
-  On large parts the 0.1% floor can hide real changes; sub-threshold deltas are still listed.
+- **Meshes are only as precise as their triangles.** A coarse STL cuts corners on curved surfaces;
+  changes smaller than that chord error can't be seen in it (the report's detection limit says
+  how small that is for each file). Flat areas keep full float precision.
+- **Faces are compared, not features.** Reports name surfaces ("cylinder Ø8 along Z at …"),
+  not design intent ("M8 clearance hole") — there's no feature tree in an exchange file.
 - **Open geometry has no volume.** A mesh with holes or a surface-only STEP/IGES has no inside, so
   its volume and centre of mass are reported as n/a (with a warning) rather than a made-up number;
   the bounding box, area and previews still work. Inside-out mesh bodies are flipped and noted.

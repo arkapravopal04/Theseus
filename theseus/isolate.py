@@ -23,39 +23,41 @@ _PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(theseus.__file
 DEFAULT_TIMEOUT_S = 300
 
 
-class NotCADError(Exception):
-    """The file has a CAD extension but isn't CAD content (e.g. a compiled .obj object file)."""
+def _failure(message: str, old_path: str | None, new_path: str | None) -> dict:
+    """A result in which every version present failed with `message`."""
+    return {"old": None, "new": None, "precise": None, "precise_error": None, "not_cad": False,
+            "old_error": message if old_path else None, "new_error": message if new_path else None}
 
 
-def metrics_isolated(
-    path: str, timeout: float = DEFAULT_TIMEOUT_S, assume_units: str | None = None
-) -> tuple[dict | None, str | None]:
-    """Returns (metrics, error); exactly one is None. Raises NotCADError for non-CAD content."""
+def analyze_isolated(
+    old_path: str | None, new_path: str | None, timeout: float = DEFAULT_TIMEOUT_S, assume_units: str | None = None
+) -> dict:
+    """theseus.analyze.analyze_pair, run in a child process with a timeout. A crash or hang
+    comes back as an error on each version rather than taking this process down."""
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(p for p in (_PACKAGE_PARENT, env.get("PYTHONPATH")) if p)
 
     with tempfile.TemporaryDirectory() as tmp:
         out = os.path.join(tmp, "result.json")
-        cmd = [sys.executable, "-m", "theseus._worker", path, out]
-        if assume_units:
-            cmd += ["--units", assume_units]
+        cmd = [sys.executable, "-m", "theseus._worker", out]
+        for flag, value in (("--old", old_path), ("--new", new_path), ("--units", assume_units)):
+            if value:
+                cmd += [flag, value]
         try:
             proc = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
         except subprocess.TimeoutExpired:
-            return None, f"timed out after {timeout:g}s while loading"
+            return _failure(f"timed out after {timeout:g}s while loading", old_path, new_path)
 
         if proc.returncode < 0:
             try:
                 name = signal.Signals(-proc.returncode).name
             except ValueError:
                 name = f"signal {-proc.returncode}"
-            return None, f"the geometry kernel crashed while loading ({name}) — the file may be malformed"
+            return _failure(f"the geometry kernel crashed while loading ({name}) — the file may be malformed",
+                            old_path, new_path)
         if not os.path.exists(out):
             tail = proc.stderr.decode(errors="replace").strip().splitlines()
-            return None, f"loader failed: {tail[-1] if tail else f'exit code {proc.returncode}'}"
+            return _failure(f"loader failed: {tail[-1] if tail else f'exit code {proc.returncode}'}", old_path, new_path)
 
         with open(out, encoding="utf-8") as f:
-            result = json.load(f)
-    if result.get("not_cad"):
-        raise NotCADError(result["error"])
-    return result.get("metrics"), result.get("error")
+            return json.load(f)

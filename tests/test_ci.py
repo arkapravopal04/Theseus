@@ -12,7 +12,7 @@ from theseus import ci
 from theseus.compare import REPORT_MARKER
 from theseus.formats import paths_filter
 from theseus.gitops import Change, changed_files
-from theseus.isolate import metrics_isolated
+from theseus.isolate import analyze_isolated
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,7 +92,7 @@ def test_end_to_end_report(repo, capsys, monkeypatch):
     out = run_action(capsys)
 
     assert out.startswith(REPORT_MARKER)
-    assert "`NEWNAME.STEP` (renamed from `OLDNAME.STEP`) — no significant change" in out
+    assert "`NEWNAME.STEP` (renamed from `OLDNAME.STEP`) — identical (byte-for-byte)" in out
     assert "`gone.stl` (deleted)" in out
     assert "`part.step` (changed)" in out and "Volume: 8000.000 → 7340.362" in out
     skipped = out.split("### Skipped", 1)[1]
@@ -159,13 +159,32 @@ def test_oversized_file_is_skipped(repo, capsys, monkeypatch):
 
 
 def test_isolated_timeout_becomes_an_error_not_a_crash():
-    metrics, error = metrics_isolated(fixture("bracket_fillets.step"), timeout=0.01)
-    assert metrics is None and "timed out" in error
+    result = analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), timeout=0.01)
+    assert result["new"] is None and "timed out" in result["new_error"] and "timed out" in result["old_error"]
 
 
-def test_isolated_load_matches_in_process():
-    metrics, error = metrics_isolated(fixture("cube20.step"))
-    assert error is None and metrics["volume_mm3"] == pytest.approx(8000, abs=1e-3)
+def test_isolated_analysis_matches_in_process():
+    result = analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"))
+    assert result["old_error"] is None and result["new_error"] is None
+    assert result["old"]["volume_mm3"] == pytest.approx(8000, abs=1e-3)
+    assert result["precise"]["method"] == "exact B-rep" and not result["precise"]["identical"]
+
+
+def test_isolated_crash_is_reported_per_version(monkeypatch):
+    import subprocess as sp
+    import sys
+
+    from theseus import isolate
+
+    real_run = sp.run
+
+    def segfaulting_child(cmd, **kwargs):
+        return real_run([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)"], **kwargs)
+
+    monkeypatch.setattr(isolate.subprocess, "run", segfaulting_child)
+    result = isolate.analyze_isolated(None, fixture("cube20.step"))
+    assert "crashed" in result["new_error"] and "SIGSEGV" in result["new_error"]
+    assert result["old_error"] is None
 
 
 class FakeGh:

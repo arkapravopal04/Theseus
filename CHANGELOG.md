@@ -5,6 +5,26 @@ resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`
 
 ## 1.1.0 — unreleased
 
+### Precise geometric diff
+- Two versions are now compared geometrically, not just by volume/bounding box/centre of mass:
+  exact B-reps face by face (surface type and parameters — plane offset, cylinder axis and
+  diameter, sphere, cone, torus; free-form faces by projection) and vertex by vertex; meshes
+  per vertex (same triangulation) or by two-way surface deviation, measured exactly against
+  B-rep surfaces where one side is a STEP/IGES/BREP. Every difference says where it is.
+- Every comparison states its detection limit — kernel precision, the file's declared precision
+  (STEP uncertainty), the digits its coordinates were written with, float precision, or a mesh's
+  per-triangle chord error — and files read as *changed*, *micro-change* or *identical (to within …)*.
+- `--sensitivity engineering|fine|exact` (action input `sensitivity`) sets how big a difference
+  must be to be headlined as a change; smaller real differences are still listed.
+- Fixed: a change had to exceed both 0.01 mm *and* 0.1% to count, so on a 200 mm part a 0.19 mm
+  face offset was reported as "no significant change". Thresholds now gate on the detection
+  limit, then 0.01 mm *or* 0.1%; centre-of-mass shifts are judged in absolute terms (their
+  coordinates depend on the origin).
+- Bounding boxes are now the geometry's exact extent (OCCT pads the default by shape tolerances,
+  which made tolerance-only re-exports look resized); volumes use adaptive integration with a
+  reported error bound.
+
+
 ### Fixed
 - PNG previews were squashed into a cube for any non-cubic part (`ndarray.ptp()` was removed in
   NumPy 2 and the error was silently swallowed).

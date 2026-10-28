@@ -1,5 +1,5 @@
 name: 'theseus'
-description: 'Keep one up-to-date CAD diff comment on PRs that change STEP/IGES/BREP/STL/3MF/OBJ/PLY/GLB files'
+description: 'Precise CAD diffs on PRs: which face, hole or region changed and by how much, down to the micron'
 branding:
   icon: 'box'
   color: 'blue'
@@ -10,6 +10,9 @@ inputs:
   max-file-mb:
     description: 'Skip files larger than this many megabytes'
     default: '50'
+  sensitivity:
+    description: 'How big a difference must be to be called a change rather than a micro-change: engineering (10 µm / 0.1%), fine (1 µm / 0.01%) or exact (anything above the detection limit). Differences above the detection limit are always listed.'
+    default: 'engineering'
   units:
     description: 'Length unit of formats that do not record one (STL, OBJ, PLY, OFF, BREP): mm, cm, m, in, ft, um. Default: mm'
     default: ''
@@ -37,3 +40,4 @@ runs:
         THESEUS_TIMEOUT: ${{ inputs.timeout-seconds }}
         THESEUS_MAX_FILE_MB: ${{ inputs.max-file-mb }}
         THESEUS_UNITS: ${{ inputs.units }}
+        THESEUS_SENSITIVITY: ${{ inputs.sensitivity }}

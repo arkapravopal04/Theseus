@@ -61,7 +61,8 @@ def load_mesh(path: str, fmt: str, assume_units: str | None) -> Model:
         raise LoadError(f"{path} contains non-finite vertex coordinates")
 
     mesh, bodies, flipped = _orient_bodies(loaded)
-    model = Model(path, fmt, "mesh", mesh=mesh, units_note=note, bodies=bodies)
+    model = Model(path, fmt, "mesh", mesh=mesh, units_note=note, bodies=bodies,
+                  mm_per_file_unit=to_mm_factor(units))
     if flipped:
         model.warnings.append(f"{flipped} inside-out bod{'y' if flipped == 1 else 'ies'} flipped to face outward")
     return model
