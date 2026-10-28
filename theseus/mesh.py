@@ -14,13 +14,19 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
+from theseus.model import Model
 
-def extract_mesh(shape: TopoDS_Shape, deflection: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+
+def extract_mesh(source: Model | TopoDS_Shape, deflection: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     """Returns (vertices, faces): vertices is (N,3) float, faces is (M,3) int indices into it.
 
-    No vertex deduplication across triangles — fine for the small parts this tool targets,
-    and much simpler than welding shared edges between OCCT's per-face triangulations.
+    A mesh Model is returned as-is (it already is triangles). A B-rep is tessellated, with no
+    vertex deduplication across triangles — much simpler than welding shared edges between
+    OCCT's per-face triangulations.
     """
+    if isinstance(source, Model) and source.kind == "mesh":
+        return np.asarray(source.mesh.vertices, dtype=float), np.asarray(source.mesh.faces, dtype=int)
+    shape = source.shape if isinstance(source, Model) else source
     BRepMesh_IncrementalMesh(shape, deflection)
 
     vertices: list[tuple[float, float, float]] = []

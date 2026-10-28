@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "theseus"
-version = "0.1.0"
-description = "Diff and preview STEP/IGES/BREP/STL CAD files without needing CAD software."
+dynamic = ["version"]
+description = "Diff and preview CAD files (STEP/IGES/BREP/STL/3MF/OBJ/PLY/GLB) without needing CAD software."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
@@ -14,6 +14,9 @@ dependencies = [
     "numpy",
     "trimesh",
     "matplotlib",
+    "scipy",
+    "networkx",
+    "lxml",
 ]
 
 [project.urls]
@@ -21,6 +24,9 @@ Repository = "https://github.com/arkapravopal04/theseus"
 
 [project.scripts]
 theseus = "theseus.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "theseus.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["theseus*"]

@@ -1,18 +1,16 @@
 # theseus
 
-See what changed in a CAD file without opening CAD software. `theseus` reads
-STEP/IGES/BREP/STL files with the OpenCascade geometry kernel, computes volume /
-bounding box / centre of mass / solid count, and reports the difference
-between two versions — as a CLI, or as an automatic comment on pull requests
-that touch `.step`/`.stp`/`.iges`/`.igs`/`.brep`/`.brp`/`.stl` files.
+See what changed in a CAD file without opening CAD software. `theseus` reads STEP, IGES,
+BREP, STL, 3MF, OBJ, PLY, OFF and GLB files, computes volume / surface area / bounding box /
+centre of mass / body counts, and reports the difference between two versions — as a CLI, or
+as an automatic, always-current comment on pull requests that touch CAD files.
 
 ## Why
 
-Reviewing a CAD file change on GitHub normally means downloading both
-versions and opening them in AutoCAD/Fusion/SolidWorks just to see if
-anything actually changed. This gives a numeric summary — did the volume
-change, did the bounding box change, did a solid get added or removed —
-straight in the PR, for anyone, with no CAD software installed.
+Reviewing a CAD file change on GitHub normally means downloading both versions and opening them
+in AutoCAD/Fusion/SolidWorks just to see if anything actually changed. This gives a numeric
+summary — did the volume change, did the bounding box change, did a solid get added or removed,
+is the new geometry even valid — straight in the PR, for anyone, with no CAD software installed.
 
 ## Install
 
@@ -22,7 +20,22 @@ straight in the PR, for anyone, with no CAD software installed.
 name: theseus
 on:
   pull_request:
-    paths: ['**.step', '**.stp', '**.iges', '**.igs', '**.brep', '**.brp', '**.stl']
+    # [sS]-style classes because path filters are case-sensitive and CAD exports are often
+    # uppercase (PART.STEP).
+    paths:
+      - '**.[sS][tT][eE][pP]'
+      - '**.[sS][tT][pP]'
+      - '**.[pP]21'
+      - '**.[iI][gG][eE][sS]'
+      - '**.[iI][gG][sS]'
+      - '**.[bB][rR][eE][pP]'
+      - '**.[bB][rR][pP]'
+      - '**.[sS][tT][lL]'
+      - '**.3[mM][fF]'
+      - '**.[gG][lL][bB]'
+      - '**.[pP][lL][yY]'
+      - '**.[oO][bB][jJ]'
+      - '**.[oO][fF][fF]'
 permissions:
   contents: read
   pull-requests: write
@@ -35,10 +48,23 @@ jobs:
       - uses: arkapravopal04/theseus@v1
 ```
 
-That's the whole setup — no other config. `fetch-depth: 0` is required:
-without full history, the base commit isn't in the checkout and the diff
-can't read the old version of the file. Every PR that touches a CAD file
-gets an automatic comment with the volume/bounding-box/centre-of-mass diff.
+That's the whole setup. `fetch-depth: 0` is required: without full history the base commit
+isn't in the checkout and the old version of each file can't be read. Every PR that touches a
+CAD file gets one comment, which is updated in place on each push rather than re-posted. The
+full report is also written to the workflow run's summary page.
+
+Optional inputs (`with:`):
+
+| Input | Default | |
+|---|---|---|
+| `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
+| `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
+| `max-file-mb` | `50` | Skip files larger than this |
+| `python-version` | `3.11` | |
+
+CAD files in **Git LFS**: add `lfs: true` to the checkout step's `with:` and theseus fetches the
+real content for both versions. The action also runs on `push` events (the report then goes to
+the run summary only).
 
 **As a CLI** — installs straight from GitHub, no cloning needed:
 
@@ -50,41 +76,57 @@ pip install git+https://github.com/arkapravopal04/theseus.git
 theseus old.step new.step --out report.md --png preview.png
 ```
 
-`old` may be omitted to just report on a single (new) file. `--glb` also
-exports a `.glb` mesh — commit it to GitHub for a free interactive
-rotate/zoom viewer, no CAD software needed.
+`old` may be omitted to just report on a single (new) file. `--glb` also exports a `.glb` mesh —
+commit it to GitHub for a free interactive rotate/zoom viewer, no CAD software needed. `--units in`
+declares the unit of unitless formats. The exit status is 2 if a file can't be read or written.
+
+## Formats and units
+
+| Format | Extensions | Geometry | Units |
+|---|---|---|---|
+| STEP | `.step` `.stp` `.p21` | exact (B-rep) | from the file, converted to mm |
+| IGES | `.iges` `.igs` | exact (B-rep) | from the file, converted to mm |
+| OpenCascade BREP | `.brep` `.brp` | exact (B-rep) | none recorded — assumed mm, or `--units` |
+| STL | `.stl` (ASCII or binary) | triangle mesh | none recorded — assumed mm, or `--units` |
+| 3MF | `.3mf` | triangle mesh | from the file, converted to mm |
+| glTF binary | `.glb` | triangle mesh | metres (per the glTF spec), converted to mm |
+| OBJ, PLY, OFF | `.obj` `.ply` `.off` | triangle mesh | none recorded — assumed mm, or `--units` |
+
+Formats are recognised by content, not just extension: `PART.STEP`, a STEP file saved as
+`part.step.bak`, and binary STLs whose header starts with "solid" all load correctly, and a
+compiled `.obj` object file in the same repo is ignored rather than reported as a broken model.
+Every report says where its units came from ("file units: inch, converted to mm" or "unitless
+format, assumed mm").
 
 ## How it works
 
-1. `git diff --name-only` finds changed CAD files between the PR's base and head.
-2. The old version is pulled with `git show <base>:<path>` to a temp file; the new
-   version is read from the working tree.
-3. Each version is loaded into OpenCascade (`OCP`) and reduced to a handful of
-   metrics: volume, bounding box, centre of mass, solid count.
-4. The two metric sets are diffed and formatted as one markdown comment,
-   posted with `gh pr comment`.
+1. `git diff --name-status -M` finds changed CAD files between the PR's merge base and head,
+   following renames (a renamed part is diffed against its own history).
+2. Each version is read as a raw blob (`git cat-file`), with Git LFS pointers resolved.
+3. Each version is loaded in its own child process with a timeout — a malformed file that
+   crashes or hangs the geometry kernel becomes one "Skipped" line, not a failed run.
+   Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
+4. The metric sets are diffed and formatted as one markdown comment, edited in place on each push.
 
 ## Limitations
 
-- **STEP, IGES, BREP, and STL only.** No DWG, no SLDPRT, no native format for any specific
-  CAD package — those are proprietary formats with no free reader.
-- **STL has no exact topology.** It's a bare triangle mesh, so volume/bounding-box/centre-of-
-  mass are computed by sewing the triangles into a closed solid first. An open or
-  non-manifold mesh (a surface, not a watertight body) can't be closed into a solid — its
-  volume won't be meaningful, though bounding box and preview rendering still work.
-- **Volume-based, not topological.** This compares numbers derived from the geometry, not
-  the geometry itself. Two different parts that happen to have the same volume, bounding
-  box, and centre of mass will be reported as unchanged.
-- **"Volume", not "mass".** There's no density information in a STEP file, so nothing here
-  is a mass or weight calculation.
-- **No Git LFS.** If your CAD files are stored in LFS, the checkout only contains pointer
-  files unless LFS is explicitly fetched; theseus detects this and skips the file with a
-  note rather than reporting garbage.
-- **Small changes are treated as noise.** Differences under 0.01mm or 0.1% are not reported,
-  to avoid flagging tessellation/floating-point wobble as a real change.
-- Files over 50MB are skipped rather than loaded.
+- **No native CAD formats.** No DWG, SLDPRT, IPT, F3D, CATPart or other proprietary format —
+  there's no free reader for them. Export STEP alongside your native files.
+- **Volume-based, not topological.** This compares numbers derived from the geometry, not the
+  geometry itself. Two different parts that happen to have the same volume, bounding box, and
+  centre of mass will be reported as unchanged.
+- **Small changes are treated as noise.** A metric change counts only if it exceeds both 0.01 mm
+  (that length cubed for volume) and 0.1% — tunable with `--abs-threshold-mm` / `--rel-threshold`.
+  On large parts the 0.1% floor can hide real changes; sub-threshold deltas are still listed.
+- **Open geometry has no volume.** A mesh with holes or a surface-only STEP/IGES has no inside, so
+  its volume and centre of mass are reported as n/a (with a warning) rather than a made-up number;
+  the bounding box, area and previews still work. Inside-out mesh bodies are flipped and noted.
+- **"Volume", not "mass".** CAD exchange files carry no density, so nothing here is a mass or
+  weight calculation.
+- **Fork PRs** get a read-only token, so the comment can't be posted; the report is still in the
+  run summary.
 
 ## License
 
-MIT for this project's code. The geometry kernel underneath (OpenCascade Technology,
-via the [OCP](https://github.com/CadQuery/OCP) bindings) is **LGPL-2.1**.
+MIT for this project's code. The geometry kernel underneath (OpenCascade Technology, via the
+[OCP](https://github.com/CadQuery/OCP) bindings) is **LGPL-2.1**.

@@ -5,7 +5,7 @@ import trimesh
 
 from theseus.compare import Thresholds, build_report, diff_one_file
 from theseus.export import export_mesh
-from theseus.load import LoadError, load_shape
+from theseus.load import LoadError, load_model
 from theseus.mesh import extract_mesh
 from theseus.metrics import compute_metrics
 
@@ -17,7 +17,7 @@ def fixture(name: str) -> str:
 
 
 def test_cube_volume_is_exact():
-    shape = load_shape(fixture("cube20.step"))
+    shape = load_model(fixture("cube20.step"))
     m = compute_metrics(shape)
     assert m["volume_mm3"] == pytest.approx(8000, abs=1e-3)
     assert m["solid_count"] == 1
@@ -25,30 +25,30 @@ def test_cube_volume_is_exact():
 
 
 def test_assembly_has_two_solids():
-    shape = load_shape(fixture("assembly_two_boxes.step"))
+    shape = load_model(fixture("assembly_two_boxes.step"))
     m = compute_metrics(shape)
     assert m["solid_count"] == 2
     assert m["volume_mm3"] == pytest.approx(2000, abs=1e-3)
 
 
 def test_bracket_volume_less_than_solid_box():
-    shape = load_shape(fixture("bracket_fillets.step"))
+    shape = load_model(fixture("bracket_fillets.step"))
     m = compute_metrics(shape)
     assert 0 < m["volume_mm3"] < 40 * 20 * 10
 
 
 def test_load_missing_file_raises():
     with pytest.raises(LoadError):
-        load_shape(fixture("does_not_exist.step"))
+        load_model(fixture("does_not_exist.step"))
 
 
 def test_load_unsupported_extension_raises():
     with pytest.raises(LoadError):
-        load_shape(fixture("cube20.notacad"))
+        load_model(fixture("cube20.notacad"))
 
 
 def test_brep_cube_volume_is_exact():
-    shape = load_shape(fixture("cube20.brep"))
+    shape = load_model(fixture("cube20.brep"))
     m = compute_metrics(shape)
     assert m["volume_mm3"] == pytest.approx(8000, abs=1e-3)
     assert m["solid_count"] == 1
@@ -58,7 +58,7 @@ def test_brep_cube_volume_is_exact():
 def test_stl_cube_volume_is_approximately_correct():
     """STL is a tessellated mesh, not exact BRep geometry, so the sewn-solid
     volume only agrees with the STEP file to tessellation faceting error."""
-    shape = load_shape(fixture("cube20.stl"))
+    shape = load_model(fixture("cube20.stl"))
     m = compute_metrics(shape)
     assert m["volume_mm3"] == pytest.approx(8000, rel=0.01)
     assert m["solid_count"] == 1
@@ -66,7 +66,7 @@ def test_stl_cube_volume_is_approximately_correct():
 
 
 def test_stl_assembly_has_two_solids():
-    shape = load_shape(fixture("assembly_two_boxes.stl"))
+    shape = load_model(fixture("assembly_two_boxes.stl"))
     m = compute_metrics(shape)
     assert m["solid_count"] == 2
     assert m["volume_mm3"] == pytest.approx(2000, rel=0.01)
@@ -76,34 +76,34 @@ def test_diff_step_old_to_stl_new():
     """Cross-format diff: an old STEP version compared to a new STL version of
     the same part should read as unchanged, since both resolve to the same
     volume/bbox/COM metrics regardless of source format."""
-    old = compute_metrics(load_shape(fixture("cube20.step")))
-    new = compute_metrics(load_shape(fixture("cube20.stl")))
+    old = compute_metrics(load_model(fixture("cube20.step")))
+    new = compute_metrics(load_model(fixture("cube20.stl")))
     section = diff_one_file("part.stl", old, new)
     assert "no significant change" in section
 
 
 def test_diff_new_file():
-    m = compute_metrics(load_shape(fixture("cube20.step")))
+    m = compute_metrics(load_model(fixture("cube20.step")))
     section = diff_one_file("part.step", None, m)
     assert "new file" in section
     assert "8000.000" in section
 
 
 def test_diff_deleted_file():
-    m = compute_metrics(load_shape(fixture("cube20.step")))
+    m = compute_metrics(load_model(fixture("cube20.step")))
     section = diff_one_file("part.step", m, None)
     assert "deleted" in section
 
 
 def test_diff_no_change():
-    m = compute_metrics(load_shape(fixture("cube20.step")))
+    m = compute_metrics(load_model(fixture("cube20.step")))
     section = diff_one_file("part.step", m, m)
     assert "no significant change" in section
 
 
 def test_diff_changed_volume():
-    old = compute_metrics(load_shape(fixture("cube20.step")))
-    new = compute_metrics(load_shape(fixture("bracket_fillets.step")))
+    old = compute_metrics(load_model(fixture("cube20.step")))
+    new = compute_metrics(load_model(fixture("bracket_fillets.step")))
     section = diff_one_file("part.step", old, new)
     assert "Volume" in section
 
@@ -155,7 +155,7 @@ def test_mesh_volume_agrees_with_exact_brep_volume(fixture_name):
     divergence theorem over its triangles) should match the exact analytic BRep
     volume to within tessellation faceting error. A much larger gap means the mesh
     winding/normals are wrong (this caught a real reversed-face bug during dev)."""
-    shape = load_shape(fixture(fixture_name))
+    shape = load_model(fixture(fixture_name))
     exact_volume = compute_metrics(shape)["volume_mm3"]
     vertices, faces = extract_mesh(shape, deflection=0.5)
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
@@ -163,7 +163,7 @@ def test_mesh_volume_agrees_with_exact_brep_volume(fixture_name):
 
 
 def test_export_glb_roundtrip(tmp_path):
-    shape = load_shape(fixture("cube20.step"))
+    shape = load_model(fixture("cube20.step"))
     out = str(tmp_path / "cube.glb")
     export_mesh(shape, out)
     assert os.path.getsize(out) > 0
@@ -175,7 +175,7 @@ def test_export_glb_includes_normals(tmp_path):
     """A .glb with no NORMAL accessor renders solid black under any lit material in
     downstream viewers (GitHub's built-in viewer, model-viewer, three.js) — this
     caught a real bug during dev where the exported mesh had no normal data at all."""
-    shape = load_shape(fixture("bracket_fillets.step"))
+    shape = load_model(fixture("bracket_fillets.step"))
     out = str(tmp_path / "bracket.glb")
     export_mesh(shape, out)
     loaded = trimesh.load(out)
@@ -188,8 +188,8 @@ def test_export_glb_includes_normals(tmp_path):
 
 
 def test_build_report_with_changes():
-    old = compute_metrics(load_shape(fixture("cube20.step")))
-    new = compute_metrics(load_shape(fixture("bracket_fillets.step")))
+    old = compute_metrics(load_model(fixture("cube20.step")))
+    new = compute_metrics(load_model(fixture("bracket_fillets.step")))
     report = build_report({"part.step": (old, new)})
     assert "theseus report" in report
     assert "part.step" in report

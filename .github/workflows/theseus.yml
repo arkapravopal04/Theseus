@@ -1,7 +1,22 @@
 name: theseus
 on:
   pull_request:
-    paths: ['**.step', '**.stp', '**.iges', '**.igs', '**.brep', '**.brp', '**.stl']
+    # Generated from theseus.formats.paths_filter() (tests/test_ci.py keeps them in sync).
+    # Path filters are case-sensitive; the [sS] classes match PART.STEP and part.step alike.
+    paths:
+      - '**.[sS][tT][eE][pP]'
+      - '**.[sS][tT][pP]'
+      - '**.[pP]21'
+      - '**.[iI][gG][eE][sS]'
+      - '**.[iI][gG][sS]'
+      - '**.[bB][rR][eE][pP]'
+      - '**.[bB][rR][pP]'
+      - '**.[sS][tT][lL]'
+      - '**.3[mM][fF]'
+      - '**.[gG][lL][bB]'
+      - '**.[pP][lL][yY]'
+      - '**.[oO][bB][jJ]'
+      - '**.[oO][fF][fF]'
 permissions:
   contents: read
   pull-requests: write

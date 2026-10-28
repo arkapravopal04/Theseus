@@ -14,13 +14,16 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection  # noqa: E402
 
+import numpy as np  # noqa: E402
+
 from theseus.mesh import extract_mesh  # noqa: E402
+from theseus.model import Model  # noqa: E402
 from OCP.TopoDS import TopoDS_Shape  # noqa: E402
 
 
-def render_preview(shape: TopoDS_Shape, out_path: str, deflection: float = 0.5) -> None:
-    """Render `shape` to `out_path` as a PNG. Raises ValueError if the shape has no faces."""
-    vertices, faces = extract_mesh(shape, deflection)
+def render_preview(source: Model | TopoDS_Shape, out_path: str, deflection: float = 0.5) -> None:
+    """Render a model or shape to `out_path` as a PNG. Raises ValueError if it has no faces."""
+    vertices, faces = extract_mesh(source, deflection)
     if len(faces) == 0:
         raise ValueError("shape produced no triangulated faces to render")
 
@@ -36,16 +39,11 @@ def render_preview(shape: TopoDS_Shape, out_path: str, deflection: float = 0.5) 
     ax.set_xlim(vertices[:, 0].min(), vertices[:, 0].max())
     ax.set_ylim(vertices[:, 1].min(), vertices[:, 1].max())
     ax.set_zlim(vertices[:, 2].min(), vertices[:, 2].max())
-    try:
-        ax.set_box_aspect(
-            (
-                vertices[:, 0].ptp() or 1,
-                vertices[:, 1].ptp() or 1,
-                vertices[:, 2].ptp() or 1,
-            )
-        )
-    except AttributeError:
-        pass  # older matplotlib without set_box_aspect
+    # Equal scale on every axis, or a 40x20x10 part gets squashed into a cube. (This used to
+    # call ndarray.ptp(), which NumPy 2 removed — the AttributeError was swallowed, silently
+    # distorting every preview.)
+    extent = np.ptp(vertices, axis=0)
+    ax.set_box_aspect(tuple(np.maximum(extent, extent.max() * 1e-3 or 1.0)))  # floor: flat parts
     ax.set_axis_off()
     ax.view_init(elev=25, azim=-60)
 

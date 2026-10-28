@@ -1,13 +1,29 @@
 name: 'theseus'
-description: 'Post a volume/bounding-box diff comment on PRs that change STEP/IGES/BREP/STL CAD files'
+description: 'Keep one up-to-date CAD diff comment on PRs that change STEP/IGES/BREP/STL/3MF/OBJ/PLY/GLB files'
 branding:
   icon: 'box'
   color: 'blue'
+inputs:
+  timeout-seconds:
+    description: 'Seconds allowed to load one version of one file before it is skipped'
+    default: '300'
+  max-file-mb:
+    description: 'Skip files larger than this many megabytes'
+    default: '50'
+  units:
+    description: 'Length unit of formats that do not record one (STL, OBJ, PLY, OFF, BREP): mm, cm, m, in, ft, um. Default: mm'
+    default: ''
+  python-version:
+    description: 'Python version to run theseus with'
+    default: '3.11'
 runs:
   using: 'composite'
   steps:
+    # No `cache: pip` here: setup-python looks for a requirements file in the *caller's* repo
+    # and fails the job when there isn't one, which is most repos that just hold CAD files.
     - uses: actions/setup-python@v5
-      with: { python-version: '3.11', cache: 'pip' }
+      with:
+        python-version: ${{ inputs.python-version }}
     - run: pip install -r "${{ github.action_path }}/requirements.txt"
       shell: bash
     - run: python "${{ github.action_path }}/bot.py"
@@ -16,3 +32,8 @@ runs:
         GH_TOKEN: ${{ github.token }}
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        BEFORE_SHA: ${{ github.event.before }}
+        HEAD_SHA: ${{ github.event.after }}
+        THESEUS_TIMEOUT: ${{ inputs.timeout-seconds }}
+        THESEUS_MAX_FILE_MB: ${{ inputs.max-file-mb }}
+        THESEUS_UNITS: ${{ inputs.units }}

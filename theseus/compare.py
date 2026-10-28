@@ -37,6 +37,10 @@ class Thresholds:
 
 DEFAULT_THRESHOLDS = Thresholds()
 
+# Hidden marker so the GitHub Action can find and update its own comment instead of
+# posting a new one on every push.
+REPORT_MARKER = "<!-- theseus-report -->"
+
 
 def _changed(old_val: float, new_val: float, *, abs_threshold: float, rel_threshold: float) -> bool:
     abs_diff = abs(new_val - old_val)
@@ -63,47 +67,90 @@ def _fmt_small(v: float) -> str:
     return f"{v:+.6g}"
 
 
+def _vol(v: float | None) -> str:
+    return "n/a" if v is None else f"{_fmt(v)} mm³"
+
+
+def _dims(m: dict) -> tuple[float, float, float]:
+    b = m["bbox"]
+    return tuple(b[i + 3] - b[i] for i in range(3))
+
+
+def _fmt_dims(dims) -> str:
+    return f"{tuple(round(d, 2) for d in dims)} mm (dx, dy, dz)"
+
+
+def _title(path: str, old_path: str | None) -> str:
+    if old_path and old_path != path:
+        return f"`{path}` (renamed from `{old_path}`)"
+    return f"`{path}`"
+
+
+def _summary_lines(m: dict) -> list[str]:
+    lines = [
+        f"- Volume: {_vol(m['volume_mm3'])}",
+        f"- Bounding box: {_fmt_dims(_dims(m))}",
+        f"- Solids: {m['solid_count']}",
+    ]
+    if m.get("units_note"):
+        lines.append(f"- Units: {m['units_note']}")
+    return lines
+
+
+def _warning_lines(m: dict) -> list[str]:
+    return [f"- ⚠ {w}" for w in m.get("warnings", [])]
+
+
 def diff_one_file(
     path: str,
     old: dict | None,
     new: dict | None,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    old_path: str | None = None,
 ) -> str:
-    """Return a markdown section describing the change to a single file."""
+    """Return a markdown section describing the change to a single file.
+
+    old_path: the file's previous path, when it was renamed.
+    """
     if old is None and new is None:
         return ""
+    title = _title(path, old_path)
 
     if old is None:
-        lines = [f"### `{path}` (new file)"]
-        lines.append(f"- Volume: {_fmt(new['volume_mm3'])} mm³")
-        lines.append(f"- Solids: {new['solid_count']}")
-        return "\n".join(lines)
+        return "\n".join([f"### {title} (new file)", *_summary_lines(new), *_warning_lines(new)])
 
     if new is None:
-        lines = [f"### `{path}` (deleted)"]
-        lines.append(f"- Was: {_fmt(old['volume_mm3'])} mm³, {old['solid_count']} solid(s)")
-        return "\n".join(lines)
+        was = f"{_vol(old['volume_mm3'])}, {_fmt_dims(_dims(old))}, {old['solid_count']} solid(s)"
+        return "\n".join([f"### {title} (deleted)", f"- Was: {was}"])
 
     rows = []
     noted = []  # sub-threshold deltas: real but too small to call a change
+    info = []  # context that isn't a geometry change (format, units)
 
-    vol_delta = new["volume_mm3"] - old["volume_mm3"]
-    if _changed_volume(old["volume_mm3"], new["volume_mm3"], thresholds):
-        pct = (vol_delta / old["volume_mm3"] * 100) if old["volume_mm3"] else float("inf")
-        rows.append(
-            f"- Volume: {_fmt(old['volume_mm3'])} → {_fmt(new['volume_mm3'])} mm³ "
-            f"({'+' if vol_delta >= 0 else ''}{_fmt(vol_delta)} mm³, {pct:+.1f}%)"
-        )
-    elif abs(vol_delta) > 1e-9:
-        noted.append(f"Δvolume {_fmt_small(vol_delta)} mm³ (below noise threshold)")
+    if old.get("format") and new.get("format") and old["format"] != new["format"]:
+        info.append(f"- Format: {old['format'].upper()} → {new['format'].upper()}")
+
+    old_vol, new_vol = old["volume_mm3"], new["volume_mm3"]
+    if old_vol is None or new_vol is None:
+        if (old_vol is None) != (new_vol is None):
+            rows.append(f"- Volume: {_vol(old_vol)} → {_vol(new_vol)}")
+    else:
+        vol_delta = new_vol - old_vol
+        if _changed_volume(old_vol, new_vol, thresholds):
+            pct = f", {vol_delta / old_vol * 100:+.1f}%" if old_vol else ""
+            rows.append(
+                f"- Volume: {_fmt(old_vol)} → {_fmt(new_vol)} mm³ "
+                f"({'+' if vol_delta >= 0 else ''}{_fmt(vol_delta)} mm³{pct})"
+            )
+        elif abs(vol_delta) > 1e-9:
+            noted.append(f"Δvolume {_fmt_small(vol_delta)} mm³ (below noise threshold)")
 
     if old["solid_count"] != new["solid_count"]:
         rows.append(f"- Solid count: {old['solid_count']} → {new['solid_count']}")
+    if old.get("open_bodies", 0) != new.get("open_bodies", 0):
+        rows.append(f"- Open (non-closed) bodies: {old.get('open_bodies', 0)} → {new.get('open_bodies', 0)}")
 
-    old_bbox = old["bbox"]
-    new_bbox = new["bbox"]
-    old_dims = tuple(old_bbox[i + 3] - old_bbox[i] for i in range(3))
-    new_dims = tuple(new_bbox[i + 3] - new_bbox[i] for i in range(3))
+    old_dims, new_dims = _dims(old), _dims(new)
     if any(_changed_length(o, n, thresholds) for o, n in zip(old_dims, new_dims)):
         rows.append(
             f"- Bounding box: {tuple(round(d, 2) for d in old_dims)} → "
@@ -114,36 +161,46 @@ def diff_one_file(
         if max_bbox_delta > 1e-9:
             noted.append(f"Δbbox {_fmt_small(max_bbox_delta)} mm max axis (below noise threshold)")
 
-    old_com = old["com"]
-    new_com = new["com"]
-    if any(_changed_length(o, n, thresholds) for o, n in zip(old_com, new_com)):
-        rows.append(
-            f"- Centre of mass: {tuple(round(c, 2) for c in old_com)} → "
-            f"{tuple(round(c, 2) for c in new_com)} mm"
-        )
-    else:
-        max_com_delta = max(abs(n - o) for o, n in zip(old_com, new_com))
-        if max_com_delta > 1e-9:
-            noted.append(f"Δcentre of mass {_fmt_small(max_com_delta)} mm max axis (below noise threshold)")
+    old_com, new_com = old["com"], new["com"]
+    if old_com is not None and new_com is not None:
+        if any(_changed_length(o, n, thresholds) for o, n in zip(old_com, new_com)):
+            rows.append(
+                f"- Centre of mass: {tuple(round(c, 2) for c in old_com)} → "
+                f"{tuple(round(c, 2) for c in new_com)} mm"
+            )
+        else:
+            max_com_delta = max(abs(n - o) for o, n in zip(old_com, new_com))
+            if max_com_delta > 1e-9:
+                noted.append(f"Δcentre of mass {_fmt_small(max_com_delta)} mm max axis (below noise threshold)")
+
+    if old.get("valid") is not False and new.get("valid") is False:
+        rows.append("- Validity: valid → **invalid**")
+    # A format change already explains differing unit notes (STEP declares units, STL can't).
+    if not info and old.get("units_note") != new.get("units_note") and new.get("units_note"):
+        info.append(f"- Units: {old.get('units_note') or 'unknown'} → {new['units_note']}")
 
     if not rows:
-        header = f"### `{path}` — no significant change"
-        if noted:
-            return "\n".join([header, *[f"- {n}" for n in noted]])
-        return header
+        header = f"### {title} — no significant change"
+        return "\n".join([header, *info, *[f"- {n}" for n in noted], *_warning_lines(new)])
 
-    return "\n".join([f"### `{path}` (changed)", *rows])
+    return "\n".join([f"### {title} (changed)", *rows, *info, *_warning_lines(new)])
 
 
 def build_report(
     results: dict[str, tuple[dict | None, dict | None]],
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    renamed_from: dict[str, str] | None = None,
 ) -> str:
-    """results: path -> (old_metrics_or_None, new_metrics_or_None)."""
-    sections = [diff_one_file(path, old, new, thresholds) for path, (old, new) in results.items()]
+    """results: path -> (old_metrics_or_None, new_metrics_or_None).
+    renamed_from: new path -> old path, for files renamed in this change."""
+    renamed_from = renamed_from or {}
+    sections = [
+        diff_one_file(path, old, new, thresholds, renamed_from.get(path))
+        for path, (old, new) in results.items()
+    ]
     sections = [s for s in sections if s]
 
-    header = "## theseus report\n"
+    header = REPORT_MARKER + "\n## theseus report\n"
     if not sections:
         return header + "\nNo CAD file changes to report.\n"
 
