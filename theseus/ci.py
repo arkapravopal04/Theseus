@@ -65,7 +65,7 @@ def diff_range() -> tuple[str, str] | None:
 
 
 def analyze(
-    changes: list[Change], base: str, head: str, *, timeout: float, max_bytes: int, units: str | None,
+    changes: list[Change], base: str, head: str | None, *, timeout: float, max_bytes: int, units: str | None,
     image_root: str | None = None,
 ) -> tuple[Results, dict[str, str], list[str], Images]:
     """Returns (results, renamed_from, skipped-file messages, rendered image files)."""

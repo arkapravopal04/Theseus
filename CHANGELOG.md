@@ -5,6 +5,22 @@ resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`
 
 ## 1.1.0 — unreleased
 
+### Use it however you work
+- `theseus app`: drop two versions of a part into a browser window and get the report — no
+  command line, no git. Runs on this computer only (127.0.0.1, a random per-session token in
+  every URL); dropped files are deleted as soon as they've been compared.
+- `theseus compare OLD NEW`: the same report (summary, findings, images, 3D viewer) as a web page,
+  opened in your browser.
+- `theseus setup git`: plain `git diff`, `git log -p` and git GUIs show CAD files as readable
+  text — every face with its dimensions to the nanometre, so a 2 µm larger hole is one changed
+  line. Works with any git host (GitLab, Bitbucket, your own server) and offline; Git LFS files
+  are resolved.
+- `theseus diff [BASE] [HEAD]`: the full visual report for every CAD file changed in a local
+  repo — by default this branch plus uncommitted and not-yet-added files.
+- `theseus setup github`: writes the pull-request workflow (with `lfs: true` when the repo uses
+  Git LFS).
+- `theseus --version`; `theseus OLD NEW --out report.md` keeps working as before.
+
 ### See the change
 - Before / after / difference images for every changed file, inline in the PR comment. Added
   material is green and removed material red (exact OpenCascade booleans for B-reps, manifold3d

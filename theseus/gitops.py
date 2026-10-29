@@ -38,10 +38,13 @@ def merge_base(a: str, b: str) -> str:
         return a  # unrelated histories or a shallow clone: best effort
 
 
-def changed_files(base: str, head: str = "HEAD", keep: Callable[[str], bool] = is_candidate) -> list[Change]:
+def changed_files(base: str, head: str | None = "HEAD", keep: Callable[[str], bool] = is_candidate) -> list[Change]:
     """CAD files that differ between two revisions, with renames detected (so a renamed part is
-    diffed against its own history instead of showing up as a brand-new file)."""
-    tokens = _git("diff", "--name-status", "-z", "-M", base, head).decode().split("\0")
+    diffed against its own history instead of showing up as a brand-new file).
+
+    head=None compares against the working tree instead of a commit: uncommitted edits, and new
+    CAD files that haven't been `git add`ed yet (a fresh export is usually untracked)."""
+    tokens = _git("diff", "--name-status", "-z", "-M", base, *([head] if head else [])).decode().split("\0")
     changes = []
     i = 0
     while i < len(tokens) and tokens[i]:
@@ -62,7 +65,14 @@ def changed_files(base: str, head: str = "HEAD", keep: Callable[[str], bool] = i
             changes.append(Change("D", old, old))
         else:  # M, T (type change)
             changes.append(Change("M", new, old))
+    if head is None:
+        untracked = _git("ls-files", "--others", "--exclude-standard", "-z").decode().split("\0")
+        changes += [Change("A", p, None) for p in untracked if p and keep(p)]
     return changes
+
+
+def repo_root() -> str:
+    return _git("rev-parse", "--show-toplevel").decode().strip()
 
 
 def _lfs_size(pointer: bytes) -> int | None:
@@ -82,23 +92,31 @@ def _resolve_lfs(pointer: bytes, path: str) -> bytes:
     return proc.stdout
 
 
-def materialize(rev: str, path: str, dest_dir: str, max_bytes: int) -> str | None:
-    """Write `path` as of `rev` into dest_dir (keeping its file name, so its extension still
-    identifies the format). Returns the written path, or None if the file doesn't exist at rev.
+def materialize(rev: str | None, path: str, dest_dir: str, max_bytes: int) -> str | None:
+    """Write `path` as of `rev` (None: the working tree, relative to the repo root) into dest_dir,
+    keeping its file name so its extension still identifies the format. Returns the written path,
+    or None if the file doesn't exist there.
 
     Reads the raw blob with `git cat-file` rather than `git show`, so a textconv diff driver
     configured for CAD files can never substitute its text summary for the real geometry.
     """
-    spec = f"{rev}:{path}"
-    try:
-        size = int(_git("cat-file", "-s", spec))
-    except subprocess.CalledProcessError:
-        return None
     limit_mb = max_bytes // (1024 * 1024)
-    if size > max_bytes:
-        raise LoadError(f"{path} exceeds {limit_mb}MB, skipping")
-
-    content = _git("cat-file", "blob", spec)
+    if rev is None:
+        if not os.path.isfile(path):
+            return None
+        if os.path.getsize(path) > max_bytes:
+            raise LoadError(f"{path} exceeds {limit_mb}MB, skipping")
+        with open(path, "rb") as f:
+            content = f.read()
+    else:
+        spec = f"{rev}:{path}"
+        try:
+            size = int(_git("cat-file", "-s", spec))
+        except subprocess.CalledProcessError:
+            return None
+        if size > max_bytes:
+            raise LoadError(f"{path} exceeds {limit_mb}MB, skipping")
+        content = _git("cat-file", "blob", spec)
     if content.startswith(LFS_POINTER_PREFIX):
         real_size = _lfs_size(content)
         if real_size is not None and real_size > max_bytes:
