@@ -1,90 +1,315 @@
 # theseus
 
-See what changed in a CAD file without opening CAD software. `theseus` reads
-STEP/IGES/BREP/STL files with the OpenCascade geometry kernel, computes volume /
-bounding box / centre of mass / solid count, and reports the difference
-between two versions — as a CLI, or as an automatic comment on pull requests
-that touch `.step`/`.stp`/`.iges`/`.igs`/`.brep`/`.brp`/`.stl` files.
+See exactly what changed in a CAD file — which face moved, which hole grew, by how many
+microns — without opening CAD software. `theseus` compares two versions of a STEP, IGES,
+BREP, STL, 3MF, OBJ, PLY, OFF or GLB file geometrically, and reports every difference with
+its location and size, down to the precision the files themselves can represent. Drop two files
+into a browser window, run it from `git diff` on any git host, or let it comment on every pull
+request that touches a CAD file. Everything runs on your own machine or CI runner; your geometry
+is never sent to an outside service.
 
-## Why
+| Before | After | Difference |
+|:-:|:-:|:-:|
+| ![Before](docs/example-before.png) | ![After](docs/example-after.png) | ![Difference](docs/example-diff.png) |
 
-Reviewing a CAD file change on GitHub normally means downloading both
-versions and opening them in AutoCAD/Fusion/SolidWorks just to see if
-anything actually changed. This gives a numeric summary — did the volume
-change, did the bounding box change, did a solid get added or removed —
-straight in the PR, for anyone, with no CAD software installed.
+```
+bracket.step (changed)
+- Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
+  - ① cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
+  - ② 2 vertices moved, added or removed — largest 0.500 mm at (54.500, 25.000, 10.000)
+  ...
+```
 
-## Install
+That hole moved 0.5 mm without changing the part's volume or bounding box — a numbers-only
+diff would call it unchanged. A **1 µm** change is still unmissable, with a zoomed detail:
 
-**As a GitHub Action** — drop this in `.github/workflows/theseus.yml`:
+![A 1 µm face offset, shown as a deviation map with a zoomed detail](docs/example-micro.png)
+
+Every PR comment starts with a summary of what changed, then one expandable section per file:
+
+| File | Result | Largest difference | What changed |
+|---|---|---|---|
+| `bracket.step` | **changed** | 0.500 mm | cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm |
+| `mount.step` | moved | — | moved +5.000 mm X, shape unchanged |
+| `plate.step` | micro-change | 1.0 µm | plane x = 200.0000 → 200.0010 — +1.0 µm |
+| `housing.step` | identical | — | identical (re-export) |
+
+Each file also gets a sheet of standard views (front, top, right, isometric) and an interactive
+3D viewer — rotate, switch between before / after / overlay / difference, slice with a section
+plane, measure, and click a finding to fly to it.
+
+## Get started
+
+theseus works the way you already work. Install it once, then pick whichever fits:
+
+| You have… | Run | You get |
+|---|---|---|
+| two files | `theseus app` (or `theseus compare old.step new.step`) | a report in your browser |
+| a git repo, on any host | `theseus setup git` | `git diff` shows CAD changes as readable text |
+| a GitHub repo | `theseus setup github` | a report comment on every pull request |
+
+### Install (once)
+
+theseus runs on Windows, macOS and Linux with Python 3.11 or newer. If you don't have Python,
+get it from [python.org](https://www.python.org/downloads/) (on Windows, tick "Add python.exe
+to PATH"), then (on macOS and Linux, type `python3` instead of `python`):
+
+```bash
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Open a new terminal (so the PATH change takes effect), then:
+
+```bash
+pipx install theseus-cad
+```
+
+[`pipx`](https://pipx.pypa.io) puts the `theseus` command on your PATH in its own environment, so
+it can't clash with anything else. `uv tool install theseus-cad` does the same, and plain
+`pip install theseus-cad` works too. During the beta, before the first PyPI release, install
+straight from GitHub instead: `pipx install git+https://github.com/arkapravopal04/theseus.git`.
+The download is large (~1.4 GB, mostly the OpenCascade geometry kernel and the VTK renderer).
+
+### 1. Compare two files (no git needed)
+
+```bash
+theseus app
+```
+
+A page opens in your browser: drop the old and the new version of a part and you get the
+report — summary, every difference with its location and size, before/after/difference
+images, and an interactive 3D view. It all runs on your computer; the files are deleted as soon
+as they've been compared and nothing is uploaded anywhere.
+
+![The drag-and-drop page](docs/example-app.png)
+
+From a terminal, `theseus compare old.step new.step` does the same and opens the report
+directly. Add `--out FOLDER` to keep the report (it's a folder with `report.html` and its
+images, so you can zip it and send it to someone who doesn't have theseus).
+
+![The report page](docs/example-report.png)
+
+### 2. Your git repository (GitLab, Bitbucket, your own server, offline)
+
+Inside the repository:
+
+```bash
+theseus setup git
+```
+
+From then on, plain `git diff`, `git log -p` and git GUIs show CAD files as text — every face
+with its dimensions — instead of thousands of lines of STEP entity numbers or "binary files
+differ". A 2 µm bigger hole is one changed line:
+
+```diff
+ faces:
+-  cylinder along Z Ø8.000000 at (50.000000, 25.000000)
++  cylinder along Z Ø8.002000 at (50.000000, 25.000000)
+   plane x = 0.000000
+```
+
+Commit the `.gitattributes` file it writes so the rest of the team gets it too (each person runs
+`theseus setup git` once). For the full visual report on everything you've changed:
+
+```bash
+theseus diff
+```
+
+That compares this branch, uncommitted edits and newly exported files that aren't added yet
+against where the branch started, and opens one report. `theseus diff v1.0 v2.0` compares any
+two revisions.
+
+### 3. GitHub pull requests
+
+Inside the repository:
+
+```bash
+theseus setup github
+```
+
+That writes `.github/workflows/theseus.yml`; commit and push it. Every pull request that changes
+a CAD file then gets one report comment, updated in place on each push. Without theseus
+installed, you can paste the same file yourself:
 
 ```yaml
+# Posts a theseus report on every pull request that changes a CAD file: what changed, where,
+# and by how much, with before/after/difference images. Written by `theseus setup github`.
 name: theseus
 on:
   pull_request:
-    paths: ['**.step', '**.stp', '**.iges', '**.igs', '**.brep', '**.brp', '**.stl']
+    # Path filters are case-sensitive; [sS]-style classes match PART.STEP and part.step alike.
+    paths:
+      - '**.[sS][tT][eE][pP]'
+      - '**.[sS][tT][pP]'
+      - '**.[pP]21'
+      - '**.[iI][gG][eE][sS]'
+      - '**.[iI][gG][sS]'
+      - '**.[bB][rR][eE][pP]'
+      - '**.[bB][rR][pP]'
+      - '**.[sS][tT][lL]'
+      - '**.3[mM][fF]'
+      - '**.[gG][lL][bB]'
+      - '**.[pP][lL][yY]'
+      - '**.[oO][bB][jJ]'
+      - '**.[oO][fF][fF]'
 permissions:
-  contents: read
-  pull-requests: write
+  contents: write        # images are stored on a separate `theseus-assets` branch
+  pull-requests: write   # to post the report comment
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }   # required — the diff needs the base commit
+        with: { fetch-depth: 0 }   # full history: the diff needs the base commit
       - uses: arkapravopal04/theseus@v1
 ```
 
-That's the whole setup — no other config. `fetch-depth: 0` is required:
-without full history, the base commit isn't in the checkout and the diff
-can't read the old version of the file. Every PR that touches a CAD file
-gets an automatic comment with the volume/bounding-box/centre-of-mass diff.
+`fetch-depth: 0` is required: without full history the base commit isn't in the checkout and
+the old version of each file can't be read. (`setup github` adds `lfs: true` when the repo keeps
+CAD files in **Git LFS**, so theseus gets the real files.) The full report is also written to
+the workflow run's summary page. The first run installs theseus (a few minutes); later runs
+reuse a cached copy. The action also runs on `push` events (the report then goes to the run
+summary only).
 
-**As a CLI** — installs straight from GitHub, no cloning needed:
+`contents: write` lets theseus put the report images on an orphan `theseus-assets` branch (one
+folder per PR, replaced on each push; your branches are never touched) so they show inline in
+the comment. Without it — or on PRs from forks, whose token is read-only — the images, standard
+views and 3D viewer are attached to the workflow run as the `theseus-images` artifact instead,
+and the comment links there. Use `images: artifact` to always do that, or `images: off`.
 
-```bash
-pip install git+https://github.com/arkapravopal04/theseus.git
-```
+Optional inputs (`with:`):
 
-```bash
-theseus old.step new.step --out report.md --png preview.png
-```
+| Input | Default | |
+|---|---|---|
+| `images` | `inline` | `inline`: images in the comment (needs `contents: write`); `artifact`: only in the run's artifact; `off`: text only |
+| `sensitivity` | `engineering` | When a difference counts as *changed* rather than a *micro-change*: `engineering` (10 µm or 0.1%), `fine` (1 µm or 0.01%), `exact` (anything above the detection limit) |
+| `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
+| `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
+| `max-file-mb` | `50` | Skip files larger than this |
+| `python-version` | `3.11` | 3.11 or newer |
 
-`old` may be omitted to just report on a single (new) file. `--glb` also
-exports a `.glb` mesh — commit it to GitHub for a free interactive
-rotate/zoom viewer, no CAD software needed.
+## Command reference
+
+| Command | |
+|---|---|
+| `theseus app` | drag-and-drop page in your browser (`--port N`, `--no-open`) |
+| `theseus compare OLD NEW` | compare two files, open the report (`--out DIR`, `--no-open`, `--no-images`) |
+| `theseus diff [BASE] [HEAD]` | every CAD file changed in this git repo; defaults: where this branch forked from main/master → the files on disk now |
+| `theseus setup git` | make `git diff` show CAD files as text (re-run safely any time) |
+| `theseus setup github` | write the pull-request workflow (`--force` replaces an existing one) |
+| `theseus textconv FILE` | print a CAD file as text — what `git diff` uses |
+| `theseus [OLD] NEW --out report.md` | the original interface: a markdown report (`--images DIR`, `--png`, `--glb`) |
+| `theseus --version` | |
+
+`compare`, `diff`, `app` and the markdown report also take `--units in` (the unit of unitless
+formats like STL) and `--sensitivity fine|exact` (what counts as a change rather than a
+micro-change). The markdown report's `--glb` exports a `.glb` mesh — commit it to GitHub for a
+free rotate/zoom viewer. Commands exit with status 2 if a file can't be read or written.
+
+## Beta
+
+theseus 1.1 is a beta. What's solid: reading every listed format, the precise geometric diff
+and its detection limits, the images, moved-part detection, the 3D viewer, and the local
+commands, all covered by an automated test suite. What still needs real-world mileage:
+
+- STEP and IGES exports from every CAD system — the test parts are generated, so files from
+  SolidWorks, Fusion, Onshape, Creo, NX or Inventor may turn up cases we haven't seen;
+- the GitHub comment on repositories other than this one, especially whether inline images show
+  on private repositories (if they don't, use `images: artifact`);
+- Windows and macOS: supported and tested in CI, but most hands-on use so far has been on Linux;
+- very large assemblies (hundreds of MB).
+
+If a result is wrong or confusing, or a file won't load, please
+[open an issue](https://github.com/arkapravopal04/theseus/issues/new/choose) with the report text
+and `theseus --version`. **Don't attach confidential CAD files** — issues are public; a simple
+part that shows the same problem is ideal.
+
+## Precision
+
+Every comparison states its **detection limit**: the smallest difference the two files can
+actually represent. Above it, every difference is reported, with where it is. Below it,
+differences are numerical noise, and a file reads as *identical (to within …)*. A sensitivity
+threshold (10 µm / 0.1% by default) only decides whether a real difference is headlined as
+*changed* or listed as a *micro-change* — it never hides one.
+
+| Comparing | How | Detection limit |
+|---|---|---|
+| STEP/IGES/BREP ↔ STEP/IGES/BREP | every face matched by surface type and exact parameters (plane offset, cylinder axis and diameter, sphere, cone, torus); free-form faces by projection; every vertex by position | 0.1 nm (kernel precision), or coarser if the file declares or was written with less precision — the report says which |
+| STL ↔ STL, same triangulation | per-vertex deltas | float32 storage: ~5 nm at 20 mm |
+| mesh ↔ mesh, different triangulation | distance from each side's vertices to the other's surface, both ways | float precision on flat areas; on curves, each triangle's own chord error |
+| STEP ↔ STL (or any B-rep ↔ mesh) | as above, measured exactly against the B-rep's true surfaces | as above |
+
+Measured by the test suite (`tests/test_precision.py`), all detected and located:
+
+| Change | Found as |
+|---|---|
+| one face of a 200 mm plate offset by 0.1 µm | `plane x = 200.00000 → 200.00010 — +0.1 µm` |
+| a Ø8 hole enlarged by 2 µm | `cylinder along Z Ø8.0000 → 8.0020 … — Ø +2.0 µm` |
+| a hole moved 0.5 mm sideways (volume unchanged) | `… (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm` |
+| the whole part rotated 0.01° | `plane y = 0.000 — tilted 0.01° (far edge moves 35.0 µm)` |
+| one STL vertex moved 1 µm | `surfaces differ by up to 1.0 µm near (…)` |
+| re-exported STEP, same geometry | `identical (to within 0.1 nm, exact B-rep)` |
+| STEP vs its own coarse STL export | identical — the STL's chord error is recognised as tessellation, not a change |
+
+## Formats and units
+
+| Format | Extensions | Geometry | Units |
+|---|---|---|---|
+| STEP | `.step` `.stp` `.p21` | exact (B-rep) | from the file, converted to mm |
+| IGES | `.iges` `.igs` | exact (B-rep) | from the file, converted to mm |
+| OpenCascade BREP | `.brep` `.brp` | exact (B-rep) | none recorded — assumed mm, or `--units` |
+| STL | `.stl` (ASCII or binary) | triangle mesh | none recorded — assumed mm, or `--units` |
+| 3MF | `.3mf` | triangle mesh | from the file, converted to mm |
+| glTF binary | `.glb` | triangle mesh | metres (per the glTF spec), converted to mm |
+| OBJ, PLY, OFF | `.obj` `.ply` `.off` | triangle mesh | none recorded — assumed mm, or `--units` |
+
+Formats are recognised by content, not just extension: `PART.STEP`, a STEP file saved as
+`part.step.bak`, and binary STLs whose header starts with "solid" all load correctly, and a
+compiled `.obj` object file in the same repo is ignored rather than reported as a broken model.
+Every report says where its units came from ("file units: inch, converted to mm" or "unitless
+format, assumed mm").
 
 ## How it works
 
-1. `git diff --name-only` finds changed CAD files between the PR's base and head.
-2. The old version is pulled with `git show <base>:<path>` to a temp file; the new
-   version is read from the working tree.
-3. Each version is loaded into OpenCascade (`OCP`) and reduced to a handful of
-   metrics: volume, bounding box, centre of mass, solid count.
-4. The two metric sets are diffed and formatted as one markdown comment,
-   posted with `gh pr comment`.
+1. `git diff --name-status -M` finds changed CAD files between the PR's merge base and head,
+   following renames (a renamed part is diffed against its own history).
+2. Each version is read as a raw blob (`git cat-file`), with Git LFS pointers resolved.
+3. Both versions of a file are loaded and compared in a child process with a timeout — a
+   malformed file that crashes or hangs the geometry kernel becomes one "Skipped" line, not a
+   failed run. Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
+4. The geometry is compared face by face (or surface to surface for meshes — see
+   [Precision](#precision)), alongside volume, area, bounding box and centre of mass. A part
+   whose volume, area and moments of inertia are unchanged is tested for a rigid move: the
+   old version, moved, must match the new one exactly before it's reported as "moved".
+5. Images are rendered headless (VTK, on a private virtual display when there's no screen;
+   a matplotlib fallback otherwise): added material in green, removed in red, or — for changes
+   too small to see as material — a deviation map with a scale bar and a zoomed detail.
+6. Everything is formatted as one markdown comment, edited in place on each push.
 
 ## Limitations
 
-- **STEP, IGES, BREP, and STL only.** No DWG, no SLDPRT, no native format for any specific
-  CAD package — those are proprietary formats with no free reader.
-- **STL has no exact topology.** It's a bare triangle mesh, so volume/bounding-box/centre-of-
-  mass are computed by sewing the triangles into a closed solid first. An open or
-  non-manifold mesh (a surface, not a watertight body) can't be closed into a solid — its
-  volume won't be meaningful, though bounding box and preview rendering still work.
-- **Volume-based, not topological.** This compares numbers derived from the geometry, not
-  the geometry itself. Two different parts that happen to have the same volume, bounding
-  box, and centre of mass will be reported as unchanged.
-- **"Volume", not "mass".** There's no density information in a STEP file, so nothing here
-  is a mass or weight calculation.
-- **No Git LFS.** If your CAD files are stored in LFS, the checkout only contains pointer
-  files unless LFS is explicitly fetched; theseus detects this and skips the file with a
-  note rather than reporting garbage.
-- **Small changes are treated as noise.** Differences under 0.01mm or 0.1% are not reported,
-  to avoid flagging tessellation/floating-point wobble as a real change.
-- Files over 50MB are skipped rather than loaded.
+- **No native CAD formats.** No DWG, SLDPRT, IPT, F3D, CATPart or other proprietary format —
+  there's no free reader for them. Export STEP alongside your native files.
+- **Meshes are only as precise as their triangles.** A coarse STL cuts corners on curved surfaces;
+  changes smaller than that chord error can't be seen in it (the report's detection limit says
+  how small that is for each file). Flat areas keep full float precision.
+- **Faces are compared, not features.** Reports name surfaces ("cylinder Ø8 along Z at …"),
+  not design intent ("M8 clearance hole") — there's no feature tree in an exchange file.
+- **Open geometry has no volume.** A mesh with holes or a surface-only STEP/IGES has no inside, so
+  its volume and centre of mass are reported as n/a (with a warning) rather than a made-up number;
+  the bounding box, area and previews still work. Inside-out mesh bodies are flipped and noted.
+- **"Volume", not "mass".** CAD exchange files carry no density, so nothing here is a mass or
+  weight calculation.
+- **Fork PRs** get a read-only token, so the comment can't be posted; the report is still in the
+  run summary, and the images in the run's artifact.
+- **Inline images on private repositories** are linked from the `theseus-assets` branch; whether
+  GitHub displays them in comments for private repos hasn't been verified yet. If they don't
+  show, use `images: artifact`.
+- **The 3D viewer loads three.js from jsDelivr**, so opening it needs an internet connection the
+  first time.
 
 ## License
 
-MIT for this project's code. The geometry kernel underneath (OpenCascade Technology,
-via the [OCP](https://github.com/CadQuery/OCP) bindings) is **LGPL-2.1**.
+MIT for this project's code. The geometry kernel underneath (OpenCascade Technology, via the
+[OCP](https://github.com/CadQuery/OCP) bindings) is **LGPL-2.1**.

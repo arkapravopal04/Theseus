@@ -1,3 +1,3 @@
-"""theseus: render and diff CAD (STEP/IGES) files without needing CAD software installed."""
+"""theseus: render and diff CAD files without needing CAD software installed."""
 
-__version__ = "0.1.0"
+__version__ = "1.1.0"

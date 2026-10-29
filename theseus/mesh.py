@@ -14,17 +14,32 @@ from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
 from OCP.TopoDS import TopoDS, TopoDS_Shape
 
+from theseus.model import Model
 
-def extract_mesh(shape: TopoDS_Shape, deflection: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+
+def extract_mesh(source: Model | TopoDS_Shape, deflection: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
     """Returns (vertices, faces): vertices is (N,3) float, faces is (M,3) int indices into it.
 
-    No vertex deduplication across triangles — fine for the small parts this tool targets,
-    and much simpler than welding shared edges between OCCT's per-face triangulations.
+    A mesh Model is returned as-is (it already is triangles). A B-rep is tessellated, with no
+    vertex deduplication across triangles — much simpler than welding shared edges between
+    OCCT's per-face triangulations.
     """
+    if isinstance(source, Model) and source.kind == "mesh":
+        return np.asarray(source.mesh.vertices, dtype=float), np.asarray(source.mesh.faces, dtype=int)
+    shape = source.shape if isinstance(source, Model) else source
+    vertices, faces, _, _ = tessellate(shape, deflection)
+    return vertices, faces
+
+
+def tessellate(shape: TopoDS_Shape, deflection: float) -> tuple[np.ndarray, np.ndarray, np.ndarray, list]:
+    """Like extract_mesh for a B-rep, plus which B-rep face each triangle came from:
+    (vertices, faces, face_index per triangle, list of TopoDS_Face)."""
     BRepMesh_IncrementalMesh(shape, deflection)
 
     vertices: list[tuple[float, float, float]] = []
     faces: list[tuple[int, int, int]] = []
+    owners: list[int] = []
+    brep_faces: list = []
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
     while exp.More():
@@ -48,9 +63,11 @@ def extract_mesh(shape: TopoDS_Shape, deflection: float = 0.5) -> tuple[np.ndarr
                     p = tri.Node(idx).Transformed(trsf)
                     vertices.append((p.X(), p.Y(), p.Z()))
                 faces.append((base, base + 1, base + 2))
+                owners.append(len(brep_faces))
+            brep_faces.append(face)
         exp.Next()
 
     if not vertices:
-        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int)
+        return np.zeros((0, 3)), np.zeros((0, 3), dtype=int), np.zeros(0, dtype=int), []
 
-    return np.array(vertices), np.array(faces, dtype=int)
+    return np.array(vertices), np.array(faces, dtype=int), np.array(owners, dtype=int), brep_faces

@@ -13,7 +13,11 @@ import trimesh
 from trimesh.visual.material import PBRMaterial
 
 from theseus.mesh import extract_mesh
+from theseus.model import Model
 from OCP.TopoDS import TopoDS_Shape
+
+# glTF is defined in metres; theseus works in millimetres.
+_METRE_FORMATS = (".glb", ".gltf")
 
 
 def _flat_vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -44,12 +48,15 @@ def _flat_vertex_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     return normals
 
 
-def export_mesh(shape: TopoDS_Shape, out_path: str, deflection: float = 0.5) -> None:
-    """Export `shape` to `out_path`. Format is inferred from the extension (.glb, .stl, .obj, ...)."""
-    vertices, faces = extract_mesh(shape, deflection)
+def export_mesh(source: Model | TopoDS_Shape, out_path: str, deflection: float = 0.5) -> None:
+    """Export a model or shape to `out_path`. Format is inferred from the extension (.glb, .stl, .obj, ...)."""
+    vertices, faces = extract_mesh(source, deflection)
     if len(faces) == 0:
         raise ValueError("shape produced no triangulated faces to export")
 
+    if out_path.lower().endswith(_METRE_FORMATS):
+        # Without this a 20mm cube would be a 20 metre cube to any viewer that measures.
+        vertices = vertices * 0.001
     mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     # Formats like .glb need a NORMAL accessor for correct lighting in downstream
     # viewers (GitHub's built-in viewer, model-viewer, etc.) — without it, a lit

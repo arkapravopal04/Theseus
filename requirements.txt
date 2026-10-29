@@ -2,3 +2,9 @@ cadquery-ocp==8.0.1.0.0  # pin: verify with `pip index versions cadquery-ocp` be
 numpy
 trimesh
 matplotlib
+scipy     # trimesh: splitting meshes into separate bodies
+networkx  # trimesh: 3MF scene graphs, mesh winding repair
+lxml      # trimesh: 3MF XML
+rtree     # trimesh: exact point-to-surface distances (precise diff)
+manifold3d  # mesh booleans for difference images
+vtk       # rendering (also pulled in by cadquery-ocp; imported directly)
