@@ -204,9 +204,13 @@ def test_isolated_analysis_matches_in_process():
     assert result["precise"]["method"] == "exact B-rep" and not result["precise"]["identical"]
 
 
-# A real native crash: SIGSEGV on Linux/macOS, an access violation on Windows.
-SEGFAULT = "import ctypes; ctypes.string_at(0)"
-CRASH_NAME = "access violation" if os.name == "nt" else "SIGSEGV"
+# A native crash. On Linux/macOS a real SIGSEGV. On Windows, ctypes turns a bad pointer into a
+# Python OSError instead of crashing, so the child exits the way a crashed Windows process does:
+# with the access-violation status 0xC0000005 as its exit code.
+if os.name == "nt":
+    SEGFAULT, CRASH_NAME = "import os; os._exit(-1073741819)", "access violation"
+else:
+    SEGFAULT, CRASH_NAME = "import ctypes; ctypes.string_at(0)", "SIGSEGV"
 
 
 def test_isolated_crash_is_reported_per_version(monkeypatch):
@@ -385,8 +389,8 @@ def test_action_reuses_a_cached_environment(tmp_path):
     out = tmp_path / "outputs"
     env = dict(os.environ, GITHUB_ACTION_PATH=root, RUNNER_TEMP=str(tmp_path), RUNNER_OS="Linux", RUNNER_ARCH="X64",
                GITHUB_OUTPUT=str(out))
-    subprocess.run(["bash", "-c", by_id["venv"]["run"].replace("python -", f'"{sys.executable}" -', 1)],
-                   env=env, check=True)
+    script = by_id["venv"]["run"].split("<<'PY'\n", 1)[1].rsplit("PY\n", 1)[0]  # the step's Python
+    subprocess.run([sys.executable, "-c", script], env=env, check=True)
     outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
     assert outputs["dir"] == str(tmp_path / "theseus-venv")
     assert outputs["key"].startswith(f"theseus-venv-Linux-X64-{sys.version.split()[0]}-")

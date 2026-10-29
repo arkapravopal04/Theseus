@@ -76,6 +76,8 @@ def test_preview_keeps_proportions(tmp_path, monkeypatch, renderer):
     `except AttributeError` — so the equal-aspect setting silently never ran and every part
     was drawn squashed into a cube. The bar's silhouette must match what the camera predicts
     for a 100x10x10 bar, not for a cube."""
+    if renderer == "vtk" and not display._vtk_works():
+        pytest.skip("VTK has no usable OpenGL here (e.g. a Windows machine without a GPU driver)")
     monkeypatch.setenv("THESEUS_RENDERER", renderer)
     monkeypatch.setattr(display, "_backend", None)
     out = tmp_path / "bar.png"
@@ -84,13 +86,24 @@ def test_preview_keeps_proportions(tmp_path, monkeypatch, renderer):
     assert abs(_silhouette_aspect(out) - _projected_aspect((10, 10, 10))) > 0.5
 
 
-def test_broken_display_falls_back_instead_of_crashing(monkeypatch):
-    """VTK segfaults on a display it can't use (e.g. a stale $DISPLAY from SSH); in-process that
+def test_a_crashing_renderer_falls_back_instead_of_crashing(monkeypatch):
+    """VTK can segfault on a display it can't use (e.g. a stale $DISPLAY from SSH); in-process that
     would kill the CLI, so the backend is checked in a throwaway process first."""
+    monkeypatch.delenv("THESEUS_RENDERER", raising=False)
+    monkeypatch.setattr(display, "_PROBE", "import ctypes; ctypes.string_at(0)")  # VTK crashing
+    monkeypatch.setattr(display, "_backend", None)
+    assert display.backend() == "mpl"
+
+
+def test_a_stale_display_does_not_crash(monkeypatch):
+    """With $DISPLAY pointing at nothing, VTK either fails (→ matplotlib) or falls back to headless
+    EGL on its own (→ VTK, and then it really renders). Either way this process survives."""
     monkeypatch.delenv("THESEUS_RENDERER", raising=False)
     monkeypatch.setenv("DISPLAY", ":987")  # nothing is listening there
     monkeypatch.setattr(display, "_backend", None)
-    assert display.backend() == "mpl"
+    chosen = display.backend()
+    assert chosen in ("vtk", "mpl")
+    assert (chosen == "vtk") == display._vtk_works()
 
 
 def test_preview_of_a_mesh(tmp_path):
