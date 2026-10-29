@@ -3,12 +3,30 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "theseus"
+name = "theseus-cad"  # the command is `theseus`; "theseus" on PyPI is an unrelated project
 dynamic = ["version"]
-description = "Diff and preview CAD files (STEP/IGES/BREP/STL/3MF/OBJ/PLY/GLB) without needing CAD software."
+description = "See exactly what changed between two versions of a CAD file (STEP, IGES, STL, 3MF, ...) — which face, which hole, by how many microns — without CAD software."
 readme = "README.md"
 license = { text = "MIT" }
-requires-python = ">=3.10"
+requires-python = ">=3.11"  # the OpenCascade wheels (cadquery-ocp) start at 3.11
+keywords = ["cad", "step", "stl", "diff", "git", "mechanical engineering", "opencascade", "code review"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Manufacturing",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+    "Topic :: Software Development :: Version Control :: Git",
+]
 dependencies = [
     "cadquery-ocp==8.0.1.0.0",
     "numpy",
@@ -23,7 +41,9 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/arkapravopal04/theseus"
+Homepage = "https://github.com/arkapravopal04/theseus"
+Issues = "https://github.com/arkapravopal04/theseus/issues"
+Changelog = "https://github.com/arkapravopal04/theseus/blob/main/CHANGELOG.md"
 
 [project.scripts]
 theseus = "theseus.cli:main"

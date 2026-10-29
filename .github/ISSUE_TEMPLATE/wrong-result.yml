@@ -1,0 +1,51 @@
+name: Wrong or confusing result
+description: theseus reported a change that isn't there, missed one, or said something unclear
+labels: [beta-feedback, result]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying the theseus beta. **Please don't attach proprietary or confidential CAD
+        files** — issues on this repository are public. If the problem needs a file to show it,
+        try to reproduce it with a simple part (a block with a hole is often enough), or describe
+        the geometry and we'll build one.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      placeholder: e.g. "It says the hole moved 0.5 mm, but I only changed its diameter."
+    validations: { required: true }
+  - type: textarea
+    id: report
+    attributes:
+      label: The report text
+      description: Paste the relevant part of the PR comment, `theseus compare` output or report page.
+      render: markdown
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: How were you using theseus?
+      options:
+        - GitHub pull request comment
+        - theseus app (drag and drop)
+        - theseus compare
+        - git diff (theseus setup git)
+        - theseus diff
+        - Other
+    validations: { required: true }
+  - type: input
+    id: formats
+    attributes:
+      label: File format(s), and the CAD program that exported them
+      placeholder: e.g. STEP AP214 from SolidWorks 2024
+  - type: input
+    id: version
+    attributes:
+      label: theseus version
+      description: "`theseus --version`, or the version in the report's footer"
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: e.g. Windows 11, macOS 15, Ubuntu 24.04, GitHub Actions

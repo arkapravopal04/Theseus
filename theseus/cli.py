@@ -224,7 +224,18 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _utf8_output() -> None:
+    # Reports are full of →, µ and Ø. Windows pipes default to a legacy code page that lacks some
+    # of them, which would make printing a result crash.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _utf8_output()
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] not in COMMANDS and argv[0] not in ("-h", "--help", "--version"):
         return _legacy(argv)

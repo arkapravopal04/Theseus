@@ -5,10 +5,39 @@ on:
   pull_request:
 jobs:
   pytest:
+    # Most mechanical engineers work on Windows: every platform the install instructions promise
+    # is tested, at the oldest and newest Python the geometry kernel ships wheels for.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.11', '3.13']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '${{ matrix.python }}', cache: 'pip' }
+      # Off-screen rendering on Linux: a virtual display and the OpenGL libraries VTK loads.
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q xvfb libgl1 libegl1
+      - run: pip install -r requirements-dev.txt
+      - run: python -m pytest tests/ -v
+
+  wheel:
+    # What engineers actually install: the built package, not this checkout.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: { python-version: '3.11', cache: 'pip' }
-      - run: pip install -r requirements-dev.txt
-      - run: python -m pytest tests/ -v
+        with: { python-version: '3.11' }
+      - run: pip install build && python -m build
+      - name: Install the wheel into a clean environment and run it
+        run: |
+          python -m venv /tmp/v
+          /tmp/v/bin/pip install dist/*.whl
+          cd /tmp
+          /tmp/v/bin/theseus --version
+          /tmp/v/bin/theseus textconv "$GITHUB_WORKSPACE/tests/fixtures/cube20.step"
+          /tmp/v/bin/theseus compare "$GITHUB_WORKSPACE/tests/fixtures/cube20.step" \
+            "$GITHUB_WORKSPACE/tests/fixtures/bracket_fillets.step" --no-open --no-images --out /tmp/report
+          test -s /tmp/report/report.html

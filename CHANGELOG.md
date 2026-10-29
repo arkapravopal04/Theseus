@@ -22,6 +22,16 @@ resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`
 - `theseus --version`; `theseus OLD NEW --out report.md` keeps working as before.
 - The Action caches its installed dependencies (~1.4 GB), so runs after the first start in
   seconds instead of minutes. It now checks for Python 3.11+ up front with a clear error.
+- Install with `pipx install theseus-cad` (PyPI name; the command is still `theseus`). Python
+  3.11+ is required (the geometry kernel has no wheels for older versions). CI now tests on
+  Windows, macOS and Linux.
+- Each file's findings now lead with what changed on its faces ("Ø8 hole → Ø8.5, moved 0.5 mm"),
+  followed by summaries such as vertex counts, even when a corner vertex moved further.
+- Windows: a native crash while loading or rendering is recognised (access violation, stack
+  overflow) and reported like a crash on Linux/macOS; reports print correctly to Windows
+  terminals and pipes; the renderer check also rejects machines whose OpenGL is too old for VTK.
+- Beta feedback: issue templates for wrong results and files that won't load (they ask you not
+  to attach confidential CAD files).
 
 ### See the change
 - Before / after / difference images for every changed file, inline in the PR comment. Added

@@ -3,8 +3,10 @@
 See exactly what changed in a CAD file — which face moved, which hole grew, by how many
 microns — without opening CAD software. `theseus` compares two versions of a STEP, IGES,
 BREP, STL, 3MF, OBJ, PLY, OFF or GLB file geometrically, and reports every difference with
-its location and size, down to the precision the files themselves can represent. It runs as
-a CLI, or as an automatic, always-current comment on pull requests that touch CAD files.
+its location and size, down to the precision the files themselves can represent. Drop two files
+into a browser window, run it from `git diff` on any git host, or let it comment on every pull
+request that touches a CAD file. Everything runs on your own machine or CI runner; your geometry
+is never sent to an outside service.
 
 | Before | After | Difference |
 |:-:|:-:|:-:|
@@ -36,24 +38,101 @@ Each file also gets a sheet of standard views (front, top, right, isometric) and
 3D viewer — rotate, switch between before / after / overlay / difference, slice with a section
 plane, measure, and click a finding to fly to it.
 
-## Why
+## Get started
 
-Reviewing a CAD file change on GitHub normally means downloading both versions and opening them
-in AutoCAD/Fusion/SolidWorks just to see if anything actually changed. `git diff` on a STEP file
-is thousands of lines of entity renumbering. theseus answers the reviewer's real questions —
-did the geometry change, where, and by how much — straight in the PR, for anyone, with no CAD
-software installed.
+theseus works the way you already work. Install it once, then pick whichever fits:
 
-## Install
+| You have… | Run | You get |
+|---|---|---|
+| two files | `theseus app` (or `theseus compare old.step new.step`) | a report in your browser |
+| a git repo, on any host | `theseus setup git` | `git diff` shows CAD changes as readable text |
+| a GitHub repo | `theseus setup github` | a report comment on every pull request |
 
-**As a GitHub Action** — drop this in `.github/workflows/theseus.yml`:
+### Install (once)
+
+theseus runs on Windows, macOS and Linux with Python 3.11 or newer. If you don't have Python,
+get it from [python.org](https://www.python.org/downloads/) (on Windows, tick "Add python.exe
+to PATH"), then:
+
+```bash
+pip install pipx
+pipx install theseus-cad
+```
+
+[`pipx`](https://pipx.pypa.io) puts the `theseus` command on your PATH in its own environment, so
+it can't clash with anything else. `uv tool install theseus-cad` does the same, and plain
+`pip install theseus-cad` works too. During the beta, before the first PyPI release, install
+straight from GitHub instead: `pipx install git+https://github.com/arkapravopal04/theseus.git`.
+The download is large (~1.4 GB, mostly the OpenCascade geometry kernel and the VTK renderer).
+
+### 1. Compare two files (no git needed)
+
+```bash
+theseus app
+```
+
+A page opens in your browser: drop the old and the new version of a part and you get the
+report — summary, every difference with its location and size, before/after/difference
+images, and an interactive 3D view. It all runs on your computer; the files are deleted as soon
+as they've been compared and nothing is uploaded anywhere.
+
+![The drag-and-drop page](docs/example-app.png)
+
+From a terminal, `theseus compare old.step new.step` does the same and opens the report
+directly. Add `--out FOLDER` to keep the report (it's a folder with `report.html` and its
+images, so you can zip it and send it to someone who doesn't have theseus).
+
+![The report page](docs/example-report.png)
+
+### 2. Your git repository (GitLab, Bitbucket, your own server, offline)
+
+Inside the repository:
+
+```bash
+theseus setup git
+```
+
+From then on, plain `git diff`, `git log -p` and git GUIs show CAD files as text — every face
+with its dimensions — instead of thousands of lines of STEP entity numbers or "binary files
+differ". A 2 µm bigger hole is one changed line:
+
+```diff
+ faces:
+-  cylinder along Z Ø8.000000 at (50.000000, 25.000000)
++  cylinder along Z Ø8.002000 at (50.000000, 25.000000)
+   plane x = 0.000000
+```
+
+Commit the `.gitattributes` file it writes so the rest of the team gets it too (each person runs
+`theseus setup git` once). For the full visual report on everything you've changed:
+
+```bash
+theseus diff
+```
+
+That compares this branch, uncommitted edits and newly exported files that aren't added yet
+against where the branch started, and opens one report. `theseus diff v1.0 v2.0` compares any
+two revisions.
+
+### 3. GitHub pull requests
+
+Inside the repository:
+
+```bash
+theseus setup github
+```
+
+That writes `.github/workflows/theseus.yml`; commit and push it. Every pull request that changes
+a CAD file then gets one report comment, updated in place on each push. Without theseus
+installed, you can paste the same file yourself:
 
 ```yaml
+# Posts a theseus report on every pull request that changes a CAD file: what changed, where,
+# and by how much, with before/after/difference images. Written by `theseus setup github`.
 name: theseus
 on:
   pull_request:
-    # [sS]-style classes because path filters are case-sensitive and CAD exports are often
-    # uppercase (PART.STEP).
+    # Path filters are case-sensitive; [sS]-style classes match PART.STEP and part.step alike.
     paths:
       - '**.[sS][tT][eE][pP]'
       - '**.[sS][tT][pP]'
@@ -70,20 +149,22 @@ on:
       - '**.[oO][fF][fF]'
 permissions:
   contents: write        # images are stored on a separate `theseus-assets` branch
-  pull-requests: write
+  pull-requests: write   # to post the report comment
 jobs:
   review:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with: { fetch-depth: 0 }   # required — the diff needs the base commit
+        with: { fetch-depth: 0 }   # full history: the diff needs the base commit
       - uses: arkapravopal04/theseus@v1
 ```
 
-That's the whole setup. `fetch-depth: 0` is required: without full history the base commit
-isn't in the checkout and the old version of each file can't be read. Every PR that touches a
-CAD file gets one comment, which is updated in place on each push rather than re-posted. The
-full report is also written to the workflow run's summary page.
+`fetch-depth: 0` is required: without full history the base commit isn't in the checkout and
+the old version of each file can't be read. (`setup github` adds `lfs: true` when the repo keeps
+CAD files in **Git LFS**, so theseus gets the real files.) The full report is also written to
+the workflow run's summary page. The first run installs theseus (a few minutes); later runs
+reuse a cached copy. The action also runs on `push` events (the report then goes to the run
+summary only).
 
 `contents: write` lets theseus put the report images on an orphan `theseus-assets` branch (one
 folder per PR, replaced on each push; your branches are never touched) so they show inline in
@@ -100,29 +181,43 @@ Optional inputs (`with:`):
 | `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
 | `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
 | `max-file-mb` | `50` | Skip files larger than this |
-| `python-version` | `3.11` | |
+| `python-version` | `3.11` | 3.11 or newer |
 
-CAD files in **Git LFS**: add `lfs: true` to the checkout step's `with:` and theseus fetches the
-real content for both versions. The action also runs on `push` events (the report then goes to
-the run summary only).
+## Command reference
 
-**As a CLI** — installs straight from GitHub, no cloning needed:
+| Command | |
+|---|---|
+| `theseus app` | drag-and-drop page in your browser (`--port N`, `--no-open`) |
+| `theseus compare OLD NEW` | compare two files, open the report (`--out DIR`, `--no-open`, `--no-images`) |
+| `theseus diff [BASE] [HEAD]` | every CAD file changed in this git repo; defaults: where this branch forked from main/master → the files on disk now |
+| `theseus setup git` | make `git diff` show CAD files as text (re-run safely any time) |
+| `theseus setup github` | write the pull-request workflow (`--force` replaces an existing one) |
+| `theseus textconv FILE` | print a CAD file as text — what `git diff` uses |
+| `theseus [OLD] NEW --out report.md` | the original interface: a markdown report (`--images DIR`, `--png`, `--glb`) |
+| `theseus --version` | |
 
-```bash
-pip install git+https://github.com/arkapravopal04/theseus.git
-```
+`compare`, `diff`, `app` and the markdown report also take `--units in` (the unit of unitless
+formats like STL) and `--sensitivity fine|exact` (what counts as a change rather than a
+micro-change). The markdown report's `--glb` exports a `.glb` mesh — commit it to GitHub for a
+free rotate/zoom viewer. Commands exit with status 2 if a file can't be read or written.
 
-```bash
-theseus old.step new.step --out report.md --png preview.png
-```
+## Beta
 
-`--images DIR` writes the before / after / difference images, the standard-views sheet and the
-interactive `viewer.html` into `DIR`, and the report links them.
+theseus 1.1 is a beta. What's solid: reading every listed format, the precise geometric diff
+and its detection limits, the images, moved-part detection, the 3D viewer, and the local
+commands, all covered by an automated test suite. What still needs real-world mileage:
 
-`old` may be omitted to just report on a single (new) file. `--glb` also exports a `.glb` mesh —
-commit it to GitHub for a free interactive rotate/zoom viewer, no CAD software needed. `--units in`
-declares the unit of unitless formats; `--sensitivity fine|exact` tightens what counts as a change.
-The exit status is 2 if a file can't be read or written.
+- STEP and IGES exports from every CAD system — the test parts are generated, so files from
+  SolidWorks, Fusion, Onshape, Creo, NX or Inventor may turn up cases we haven't seen;
+- the GitHub comment on repositories other than this one, especially whether inline images show
+  on private repositories (if they don't, use `images: artifact`);
+- Windows and macOS: supported and tested in CI, but most hands-on use so far has been on Linux;
+- very large assemblies (hundreds of MB).
+
+If a result is wrong or confusing, or a file won't load, please
+[open an issue](https://github.com/arkapravopal04/theseus/issues/new/choose) with the report text
+and `theseus --version`. **Don't attach confidential CAD files** — issues are public; a simple
+part that shows the same problem is ideal.
 
 ## Precision
 

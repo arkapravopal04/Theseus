@@ -53,10 +53,17 @@ def _start_xvfb() -> bool:
     return True
 
 
+# Exits non-zero (or crashes) unless VTK gets a usable OpenGL context. On a Windows machine with
+# no GPU driver only OpenGL 1.1 exists: VTK then "renders" nothing without failing, hence the
+# explicit SupportsOpenGL check — and warnings off, so it can't open an error dialog and hang.
 _PROBE = (
+    "import sys\n"
     "import vtkmodules.vtkRenderingOpenGL2\n"
+    "from vtkmodules.vtkCommonCore import vtkObject\n"
     "from vtkmodules.vtkRenderingCore import vtkRenderer, vtkRenderWindow\n"
+    "vtkObject.GlobalWarningDisplayOff()\n"
     "w = vtkRenderWindow(); w.SetOffScreenRendering(1); w.AddRenderer(vtkRenderer()); w.SetSize(8, 8); w.Render()\n"
+    "sys.exit(0 if w.SupportsOpenGL() else 3)\n"
 )
 
 

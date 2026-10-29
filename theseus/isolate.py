@@ -42,6 +42,25 @@ def _saved_analysis(path: str, images_error: str) -> dict | None:
     return result
 
 
+# How Windows reports a native crash: the NTSTATUS code as the exit code.
+_WINDOWS_CRASHES = {0xC0000005: "access violation", 0xC00000FD: "stack overflow", 0xC0000409: "stack buffer overrun",
+                    0xC000001D: "illegal instruction", 0xC0000094: "integer division by zero"}
+
+
+def _crash_name(returncode: int) -> str | None:
+    """What killed the child, if it crashed rather than exiting: a POSIX signal (negative return
+    code) or a Windows exception code. None for an ordinary exit."""
+    if returncode < 0:
+        try:
+            return signal.Signals(-returncode).name
+        except ValueError:
+            return f"signal {-returncode}"
+    code = returncode & 0xFFFFFFFF
+    if code >= 0xC0000000:
+        return _WINDOWS_CRASHES.get(code, f"exception 0x{code:08X}")
+    return None
+
+
 def analyze_isolated(
     old_path: str | None, new_path: str | None, timeout: float = DEFAULT_TIMEOUT_S, assume_units: str | None = None,
     image_dir: str | None = None, title: str | None = None,
@@ -65,17 +84,18 @@ def analyze_isolated(
             saved = _saved_analysis(out, f"rendering timed out after {timeout:g}s — text report only")
             return saved or _failure(f"timed out after {timeout:g}s while loading", old_path, new_path)
 
-        if proc.returncode < 0:
-            try:
-                name = signal.Signals(-proc.returncode).name
-            except ValueError:
-                name = f"signal {-proc.returncode}"
-            saved = _saved_analysis(out, f"the renderer crashed ({name}) — text report only")
-            return saved or _failure(f"the geometry kernel crashed while loading ({name}) — the file may be malformed",
+        crash = _crash_name(proc.returncode)
+        if crash:
+            saved = _saved_analysis(out, f"the renderer crashed ({crash}) — text report only")
+            return saved or _failure(f"the geometry kernel crashed while loading ({crash}) — the file may be malformed",
                                      old_path, new_path)
+        tail = proc.stderr.decode(errors="replace").strip().splitlines()
+        reason = tail[-1] if tail else f"exit code {proc.returncode}"
+        if proc.returncode != 0:
+            saved = _saved_analysis(out, f"rendering failed: {reason} — text report only")
+            return saved or _failure(f"loader failed: {reason}", old_path, new_path)
         if not os.path.exists(out):
-            tail = proc.stderr.decode(errors="replace").strip().splitlines()
-            return _failure(f"loader failed: {tail[-1] if tail else f'exit code {proc.returncode}'}", old_path, new_path)
+            return _failure(f"loader failed: {reason}", old_path, new_path)
 
         with open(out, encoding="utf-8") as f:
             return json.load(f)

@@ -1,6 +1,7 @@
 """Difference images: what they show (booleans vs deviation maps) and that it lands in the right place."""
 
 import math
+import os
 
 import matplotlib.image as mpimg
 import numpy as np
@@ -45,7 +46,7 @@ def test_boolean_volumes_match_geometry(tmp_path):
 
 
 def test_boolean_volumes_balance_the_volume_change(tmp_path):
-    fixtures = "tests/fixtures"
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
     old, new, _, v = visual_for(f"{fixtures}/cube20.step", f"{fixtures}/bracket_fillets.step")
     assert v.mode == "boolean"
     from theseus.metrics import volume

@@ -204,6 +204,11 @@ def test_isolated_analysis_matches_in_process():
     assert result["precise"]["method"] == "exact B-rep" and not result["precise"]["identical"]
 
 
+# A real native crash: SIGSEGV on Linux/macOS, an access violation on Windows.
+SEGFAULT = "import ctypes; ctypes.string_at(0)"
+CRASH_NAME = "access violation" if os.name == "nt" else "SIGSEGV"
+
+
 def test_isolated_crash_is_reported_per_version(monkeypatch):
     import subprocess as sp
     import sys
@@ -213,11 +218,11 @@ def test_isolated_crash_is_reported_per_version(monkeypatch):
     real_run = sp.run
 
     def segfaulting_child(cmd, **kwargs):
-        return real_run([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGSEGV)"], **kwargs)
+        return real_run([sys.executable, "-c", SEGFAULT], **kwargs)
 
     monkeypatch.setattr(isolate.subprocess, "run", segfaulting_child)
     result = isolate.analyze_isolated(None, fixture("cube20.step"))
-    assert "crashed" in result["new_error"] and "SIGSEGV" in result["new_error"]
+    assert "crashed" in result["new_error"] and CRASH_NAME in result["new_error"]
     assert result["old_error"] is None
 
 
@@ -236,7 +241,7 @@ def _saving_then(action: str):
 
     def child(cmd, **kwargs):
         out = cmd[3]  # python -m theseus._worker <result.json> ...
-        script = f"import os, signal, time\nopen({out!r}, 'w').write({json.dumps(analysis)!r})\n{action}"
+        script = f"import time\nopen({out!r}, 'w', encoding='utf-8').write({json.dumps(analysis)!r})\n{action}"
         return real_run([sys.executable, "-c", script], **kwargs)
 
     return child
@@ -245,12 +250,21 @@ def _saving_then(action: str):
 def test_renderer_crash_keeps_the_analysis(monkeypatch):
     from theseus import isolate
 
-    monkeypatch.setattr(isolate.subprocess, "run", _saving_then("os.kill(os.getpid(), signal.SIGSEGV)"))
+    monkeypatch.setattr(isolate.subprocess, "run", _saving_then(SEGFAULT))
     result = isolate.analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), image_dir="unused")
     assert result["old_error"] is None and result["new_error"] is None
     assert result["new"]["volume_mm3"] == pytest.approx(7340.362, abs=1e-3)
     assert result["precise"]["method"] == "exact B-rep"
-    assert "renderer crashed (SIGSEGV)" in result["images_error"] and "text report only" in result["images_error"]
+    assert f"renderer crashed ({CRASH_NAME})" in result["images_error"] and "text report only" in result["images_error"]
+
+
+def test_renderer_exception_keeps_the_analysis(monkeypatch):
+    from theseus import isolate
+
+    monkeypatch.setattr(isolate.subprocess, "run", _saving_then("raise RuntimeError('no GL context')"))
+    result = isolate.analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), image_dir="unused")
+    assert result["new"]["volume_mm3"] == pytest.approx(7340.362, abs=1e-3)
+    assert "rendering failed: RuntimeError: no GL context" in result["images_error"]
 
 
 def test_renderer_timeout_keeps_the_analysis(monkeypatch):
@@ -343,9 +357,15 @@ def _globs_in(path: str) -> list[str]:
         return re.findall(r"- '(\*\*\.[^']+)'", f.read())
 
 
-@pytest.mark.parametrize("path", [".github/workflows/theseus.yml", "README.md"])
-def test_documented_paths_filter_matches_supported_formats(path):
-    assert _globs_in(path) == paths_filter()
+def test_workflow_paths_filter_matches_supported_formats():
+    assert _globs_in(".github/workflows/theseus.yml") == paths_filter()
+
+
+def test_readme_shows_the_workflow_that_setup_github_writes():
+    from theseus.integrate import workflow_yaml
+
+    with open(os.path.join(ROOT, "README.md"), encoding="utf-8") as f:
+        assert workflow_yaml() in f.read()
 
 
 def test_action_reuses_a_cached_environment(tmp_path):

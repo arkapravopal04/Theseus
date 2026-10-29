@@ -1,0 +1,50 @@
+name: File didn't load
+description: A CAD file was skipped, timed out, crashed, or wasn't recognised
+labels: [beta-feedback, loading]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Please don't attach proprietary or confidential CAD files** — issues here are public.
+        The exact error message and the program that exported the file usually tell us enough.
+        If you can share a file, a cut-down version or a fresh export of a simple test part with
+        the same settings is best.
+  - type: textarea
+    id: error
+    attributes:
+      label: The error or "Skipped" line
+      render: text
+    validations: { required: true }
+  - type: input
+    id: format
+    attributes:
+      label: File format and size
+      placeholder: e.g. .stp, 38 MB
+    validations: { required: true }
+  - type: input
+    id: exporter
+    attributes:
+      label: Which CAD program (and version) exported it?
+      placeholder: e.g. Fusion 360, Onshape, Creo 10, FreeCAD 1.0
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: How were you using theseus?
+      options:
+        - GitHub pull request comment
+        - theseus app (drag and drop)
+        - theseus compare
+        - git diff (theseus setup git)
+        - theseus diff
+        - Other
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: theseus version
+      description: "`theseus --version`, or the version in the report's footer"
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
