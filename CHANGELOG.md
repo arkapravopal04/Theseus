@@ -20,6 +20,8 @@ resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`
 - `theseus setup github`: writes the pull-request workflow (with `lfs: true` when the repo uses
   Git LFS).
 - `theseus --version`; `theseus OLD NEW --out report.md` keeps working as before.
+- The Action caches its installed dependencies (~1.4 GB), so runs after the first start in
+  seconds instead of minutes. It now checks for Python 3.11+ up front with a clear error.
 
 ### See the change
 - Before / after / difference images for every changed file, inline in the PR comment. Added

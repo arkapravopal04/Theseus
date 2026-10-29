@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -345,3 +346,27 @@ def _globs_in(path: str) -> list[str]:
 @pytest.mark.parametrize("path", [".github/workflows/theseus.yml", "README.md"])
 def test_documented_paths_filter_matches_supported_formats(path):
     assert _globs_in(path) == paths_filter()
+
+
+def test_action_reuses_a_cached_environment(tmp_path):
+    """The dependencies are ~1.4 GB; the action caches the virtualenv and only installs on a miss.
+    Runs the action's own key step to check it computes a usable key, path and interpreter."""
+    import yaml
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    steps = yaml.safe_load(open(os.path.join(root, "action.yml"), encoding="utf-8"))["runs"]["steps"]
+    by_id = {s.get("id"): s for s in steps}
+    cache = by_id["cache"]
+    assert cache["uses"] == "actions/cache@v4" and cache["with"]["key"] == "${{ steps.venv.outputs.key }}"
+    install = steps[steps.index(cache) + 1]
+    assert install["if"] == "steps.cache.outputs.cache-hit != 'true'" and "pip install" in install["run"]
+    assert steps[steps.index(cache) + 2]["run"].startswith('"${{ steps.venv.outputs.python }}"')
+
+    out = tmp_path / "outputs"
+    env = dict(os.environ, GITHUB_ACTION_PATH=root, RUNNER_TEMP=str(tmp_path), RUNNER_OS="Linux", RUNNER_ARCH="X64",
+               GITHUB_OUTPUT=str(out))
+    subprocess.run(["bash", "-c", by_id["venv"]["run"].replace("python -", f'"{sys.executable}" -', 1)],
+                   env=env, check=True)
+    outputs = dict(line.split("=", 1) for line in out.read_text().splitlines())
+    assert outputs["dir"] == str(tmp_path / "theseus-venv")
+    assert outputs["key"].startswith(f"theseus-venv-Linux-X64-{sys.version.split()[0]}-")

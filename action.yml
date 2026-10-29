@@ -20,7 +20,7 @@ inputs:
     description: 'Length unit of formats that do not record one (STL, OBJ, PLY, OFF, BREP): mm, cm, m, in, ft, um. Default: mm'
     default: ''
   python-version:
-    description: 'Python version to run theseus with'
+    description: 'Python version to run theseus with (3.11 or newer)'
     default: '3.11'
 runs:
   using: 'composite'
@@ -28,11 +28,37 @@ runs:
     # No `cache: pip` here: setup-python looks for a requirements file in the *caller's* repo
     # and fails the job when there isn't one, which is most repos that just hold CAD files.
     - uses: actions/setup-python@v5
+      id: python
       with:
         python-version: ${{ inputs.python-version }}
-    - run: pip install -r "${{ github.action_path }}/requirements.txt"
+    # The dependencies are ~1.4 GB (OpenCascade, VTK). Installing them takes minutes, so the
+    # whole virtualenv is cached, keyed on everything that would change its contents.
+    - id: venv
       shell: bash
-    - run: python "${{ github.action_path }}/bot.py"
+      run: |
+        python - <<'PY'
+        import hashlib, os, sys
+        if sys.version_info < (3, 11):
+            sys.exit(f"::error title=theseus::theseus needs Python 3.11 or newer (python-version is {sys.version.split()[0]})")
+        digest = hashlib.sha256(open(os.path.join(os.environ["GITHUB_ACTION_PATH"], "requirements.txt"), "rb").read())
+        venv = os.path.join(os.environ["RUNNER_TEMP"], "theseus-venv")
+        python = os.path.join(venv, "Scripts", "python.exe") if os.name == "nt" else os.path.join(venv, "bin", "python")
+        key = "-".join(["theseus-venv", os.environ["RUNNER_OS"], os.environ["RUNNER_ARCH"],
+                        sys.version.split()[0], digest.hexdigest()[:16]])
+        with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+            out.write(f"dir={venv}\npython={python}\nkey={key}\n")
+        PY
+    - uses: actions/cache@v4
+      id: cache
+      with:
+        path: ${{ steps.venv.outputs.dir }}
+        key: ${{ steps.venv.outputs.key }}
+    - if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        python -m venv "${{ steps.venv.outputs.dir }}"
+        "${{ steps.venv.outputs.python }}" -m pip install --disable-pip-version-check -q -r "${{ github.action_path }}/requirements.txt"
+    - run: '"${{ steps.venv.outputs.python }}" "${{ github.action_path }}/bot.py"'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
