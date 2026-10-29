@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from html import escape
 
+from theseus.diff import report_order
 from theseus.fmt import decimals_for, fmt_len
 
 DEFAULT_ABS_THRESHOLD_MM = 0.01
@@ -190,8 +191,8 @@ def _finding_lines(findings: list[dict], thresholds: Thresholds, floor: float) -
         lines.append(f"  - {_NUMBERS[i]} {f['what']}" + (" *(micro)*" if small else ""))
     if len(findings) > MAX_LISTED_FINDINGS:
         rest = findings[MAX_LISTED_FINDINGS:]
-        lines.append(f"  - …and {len(rest)} smaller difference{'s' if len(rest) > 1 else ''} "
-                     f"(largest {fmt_len(rest[0]['magnitude_mm'])})")
+        lines.append(f"  - …and {len(rest)} more difference{'s' if len(rest) > 1 else ''} "
+                     f"(largest {fmt_len(max(f['magnitude_mm'] for f in rest))})")
     return lines
 
 
@@ -293,7 +294,7 @@ def file_section(
                            headline="no significant change")
         return Section(path, old_path, "changed", " (changed)", [*rows, *info, *warnings], headline=_headline([], rows))
 
-    findings = sorted(precise["findings"], key=lambda f: -f["magnitude_mm"])
+    findings = report_order(precise["findings"])
     notes = [f"- {n}" for n in precise.get("notes", [])]
     if precise["identical"] and not rows:
         # Metric differences above the floor can't coexist with identical geometry; whatever

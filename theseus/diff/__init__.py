@@ -31,6 +31,17 @@ class Finding:
     kind: str = "surface"
 
 
+SUMMARY_KINDS = ("vertices", "retrim")
+
+
+def report_order(findings: list[dict]) -> list[dict]:
+    """The order findings are listed, numbered and headlined in: changes to faces and regions
+    first, largest first; then the summaries (vertex counts, re-trimmed faces). A resized hole
+    is what a reviewer needs to read first, even when the corner vertices it drags along moved
+    further."""
+    return sorted(findings, key=lambda f: (f.get("kind") in SUMMARY_KINDS, -f["magnitude_mm"]))
+
+
 @dataclass
 class PreciseDiff:
     method: str  # what was compared, e.g. "exact B-rep", "mesh vertices", "surface deviation"
@@ -43,7 +54,7 @@ class PreciseDiff:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["findings"] = sorted(d["findings"], key=lambda f: -f["magnitude_mm"])[:MAX_FINDINGS]
+        d["findings"] = report_order(d["findings"])[:MAX_FINDINGS]
         return d
 
 

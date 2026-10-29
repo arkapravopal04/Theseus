@@ -125,6 +125,19 @@ def test_hole_moved_with_volume_unchanged(tmp_path, base):
     assert "(changed)" in diff_one_file("part", r["old"], r["new"], precise=r["precise"])
 
 
+def test_the_changed_hole_leads_the_report(tmp_path, base):
+    """The hole's corner vertices move further (0.75 mm) than its axis (0.5 mm), but "the Ø8 hole
+    became Ø8.5 and moved" is what a reviewer needs first: face changes lead, summaries follow."""
+    from theseus.compare import file_section
+
+    new = write_step(plate(hole_x=50.5, hole_r=4.25), tmp_path / "new.step")
+    r = analyze(base, new)
+    assert [f["kind"] for f in r["precise"]["findings"]][-2:] == ["vertices", "retrim"]
+    section = file_section("part", r["old"], r["new"], precise=r["precise"])
+    assert section.headline.startswith("cylinder along Z Ø8.000 → 8.500")
+    assert section.largest_mm == pytest.approx(0.75, abs=1e-6)  # still the true largest difference
+
+
 def test_tiny_rotation(tmp_path, base):
     new = write_step(rotated(plate(), 0.01), tmp_path / "new.step")
     precise = analyze(base, new)["precise"]

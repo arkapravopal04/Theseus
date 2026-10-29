@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from theseus.diff import report_order
 from theseus.diff.visual import REMOVED, diff_visual, union_bounds
 from theseus.model import Model
 from theseus.render import Camera, Marker, render_scene, render_views, reserved_right
@@ -18,11 +19,11 @@ MAX_MARKERS = 10  # matches the number of findings listed in the report
 
 
 def finding_markers(precise: dict | None) -> list[Marker]:
-    """Numbered markers for the findings the report lists (largest first), where they have a place.
+    """Numbered markers for the findings the report lists (in its order), where they have a place.
     Group summaries ("4 faces re-trimmed…") point at no single spot and get no marker."""
     if not precise:
         return []
-    findings = sorted(precise["findings"], key=lambda f: -f["magnitude_mm"])[:MAX_MARKERS]
+    findings = report_order(precise["findings"])[:MAX_MARKERS]
     return [Marker(tuple(f["at"]), str(i + 1)) for i, f in enumerate(findings)
             if f.get("at") and f.get("kind") != "retrim"]
 
@@ -30,7 +31,7 @@ def finding_markers(precise: dict | None) -> list[Marker]:
 def numbered_findings(precise: dict | None) -> list[dict]:
     if not precise:
         return []
-    findings = sorted(precise["findings"], key=lambda f: -f["magnitude_mm"])[:MAX_MARKERS]
+    findings = report_order(precise["findings"])[:MAX_MARKERS]
     return [{"n": i + 1, "what": f["what"], "at": f["at"] if f.get("kind") != "retrim" else None}
             for i, f in enumerate(findings)]
 
