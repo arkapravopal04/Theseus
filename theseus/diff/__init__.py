@@ -26,6 +26,9 @@ class Finding:
     what: str  # human-readable, e.g. "cylinder Ø8.0000 → Ø8.0040 along Z at (20.000, 10.000)"
     magnitude_mm: float  # how far the geometry moved, for deciding how loudly to report it
     at: tuple[float, float, float] | None = None
+    # "surface" (a face's own geometry changed), "added"/"removed" (a face appeared/went),
+    # "region" (a mesh area that deviates), or a summary: "retrim", "vertices".
+    kind: str = "surface"
 
 
 @dataclass

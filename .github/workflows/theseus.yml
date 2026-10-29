@@ -18,7 +18,7 @@ on:
       - '**.[oO][bB][jJ]'
       - '**.[oO][fF][fF]'
 permissions:
-  contents: read
+  contents: write       # report images go on the theseus-assets branch
   pull-requests: write
 jobs:
   review:

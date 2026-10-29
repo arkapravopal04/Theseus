@@ -21,6 +21,8 @@ from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopoDS import TopoDS_Shape
 
+import trimesh
+
 from theseus.model import Model
 
 METRICS_SCHEMA = 2
@@ -84,10 +86,12 @@ def _brep_metrics(model: Model) -> dict:
 
     props, volume_error = _volume_props(shape)
     vol = props.Mass() if solids else None
-    com = None
+    com = inertia = None
     if vol:
         c = props.CentreOfMass()
         com = (c.X(), c.Y(), c.Z())
+        m = props.MatrixOfInertia()  # about the centre of mass, for unit density
+        inertia = [[m.Value(i, j) for j in (1, 2, 3)] for i in (1, 2, 3)]
 
     valid = BRepCheck_Analyzer(shape).IsValid()
     warnings = []
@@ -104,6 +108,7 @@ def _brep_metrics(model: Model) -> dict:
         "area_mm2": surface_area(shape),
         "bbox": bounding_box(shape),
         "com": com,
+        "inertia": inertia,
         "solid_count": solids,
         "open_bodies": open_bodies,
         "valid": valid,
@@ -117,10 +122,12 @@ def _mesh_metrics(model: Model) -> dict:
     open_count = len(bodies) - len(closed)
 
     vol = sum(b.volume for b in closed) if closed else None
-    com = None
+    com = inertia = None
     if vol:
         weighted = sum(b.volume * b.center_mass for b in closed)
         com = tuple(float(c) for c in weighted / vol)
+        whole = closed[0] if len(closed) == 1 else trimesh.util.concatenate(closed)
+        inertia = whole.moment_inertia.tolist()  # about the combined centre of mass, unit density
 
     warnings = []
     if not closed:
@@ -134,6 +141,7 @@ def _mesh_metrics(model: Model) -> dict:
         "area_mm2": float(model.mesh.area),
         "bbox": tuple(float(v) for v in model.mesh.bounds.ravel()),
         "com": com,
+        "inertia": inertia,
         "solid_count": len(closed),
         "open_bodies": open_count,
         "valid": None,  # no B-rep validity notion for a triangle soup

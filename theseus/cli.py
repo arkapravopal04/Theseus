@@ -6,6 +6,7 @@ Exit codes: 0 success, 2 a file couldn't be read/written (argparse also uses 2 f
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from theseus.analyze import analyze_models
@@ -30,6 +31,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("new", help="path to the new version")
     parser.add_argument("--out", default="report.md", help="markdown report output path")
     parser.add_argument("--png", default=None, help="PNG preview output path (renders the new file)")
+    parser.add_argument(
+        "--images", default=None, metavar="DIR",
+        help="write before/after/difference/standard-view PNGs to DIR and show them in the report",
+    )
     parser.add_argument(
         "--glb", default=None,
         help="glTF binary output path (renders the new file) — commit this to GitHub for an "
@@ -67,8 +72,18 @@ def main(argv: list[str] | None = None) -> int:
     result = analyze_models(old_model, new_model)
     if result["precise_error"]:
         print(f"warning: {result['precise_error']} — reporting metrics only", file=sys.stderr)
-    report = build_report({args.new: (result["old"], result["new"], result["precise"])}, thresholds)
     try:
+        images = {}
+        if args.images:
+            from theseus.images import render_file_images
+
+            files = render_file_images(old_model, new_model, result["precise"], args.images, title=args.new)
+            report_dir = os.path.dirname(os.path.abspath(args.out))
+            images = {args.new: {kind: os.path.relpath(os.path.join(args.images, f), report_dir).replace(os.sep, "/")
+                                 for kind, f in files.items()}}
+            print(f"wrote {len(files)} images to {args.images}")
+        report = build_report({args.new: (result["old"], result["new"], result["precise"])}, thresholds,
+                              images=images)
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(report)
         print(f"wrote {args.out}")

@@ -376,7 +376,8 @@ def _vertex_findings(old_shape, new_shape, floor: float) -> list[Finding]:
     if not count:
         return []
     return [Finding(f"{count} vert{'ex' if count == 1 else 'ices'} moved, added or removed — "
-                    f"largest {fmt_len(worst)} at {fmt_point(worst_at)}", worst, tuple(map(float, worst_at)))]
+                    f"largest {fmt_len(worst)} at {fmt_point(worst_at)}", worst, tuple(map(float, worst_at)),
+                    "vertices")]
 
 def _counts(shape) -> dict[str, int]:
     return {name: len(_unique(shape, kind)) for name, kind in
@@ -417,16 +418,18 @@ def compare_breps(old: Model, new: Model) -> PreciseDiff:
 
     for i in removed:
         f = old_faces[i]
-        findings.append(Finding(f"removed face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid))))
+        findings.append(Finding(f"removed face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid)),
+                                "removed"))
     for j in added:
         f = new_faces[j]
-        findings.append(Finding(f"added face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid))))
+        findings.append(Finding(f"added face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid)),
+                                "added"))
     if retrimmed:
         shift, face = max(retrimmed, key=lambda t: t[0])
         findings.append(Finding(
             f"{len(retrimmed)} face{'s' if len(retrimmed) > 1 else ''} with unchanged surfaces re-trimmed by "
             f"neighbouring changes (largest boundary shift {fmt_len(shift)}, {face.describe()})",
-            shift, tuple(map(float, face.centroid)),
+            shift, tuple(map(float, face.centroid)), "retrim",
         ))
     findings += _vertex_findings(old.shape, new.shape, floor)
 

@@ -10,6 +10,9 @@ inputs:
   max-file-mb:
     description: 'Skip files larger than this many megabytes'
     default: '50'
+  images:
+    description: 'inline (default): before/after/difference images in the comment, hosted on a theseus-assets branch (needs `contents: write`). artifact: images only as a workflow artifact. off: text only.'
+    default: 'inline'
   sensitivity:
     description: 'How big a difference must be to be called a change rather than a micro-change: engineering (10 µm / 0.1%), fine (1 µm / 0.01%) or exact (anything above the detection limit). Differences above the detection limit are always listed.'
     default: 'engineering'
@@ -41,3 +44,13 @@ runs:
         THESEUS_MAX_FILE_MB: ${{ inputs.max-file-mb }}
         THESEUS_UNITS: ${{ inputs.units }}
         THESEUS_SENSITIVITY: ${{ inputs.sensitivity }}
+        THESEUS_IMAGES: ${{ inputs.images }}
+        THESEUS_IMAGE_DIR: ${{ runner.temp }}/theseus-images
+    # Always attached: the fallback when images can't go inline (fork PRs, read-only tokens),
+    # and where the full-size views and 3D viewer live.
+    - uses: actions/upload-artifact@v4
+      if: always() && inputs.images != 'off'
+      with:
+        name: theseus-images
+        path: ${{ runner.temp }}/theseus-images
+        if-no-files-found: ignore

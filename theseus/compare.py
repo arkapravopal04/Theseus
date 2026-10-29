@@ -14,6 +14,7 @@ So every file reads as exactly one of: changed, micro-change, or identical (with
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 
 from theseus.fmt import decimals_for, fmt_len
 
@@ -179,11 +180,14 @@ def _info_lines(old: dict, new: dict) -> list[str]:
     return info
 
 
+_NUMBERS = "①②③④⑤⑥⑦⑧⑨⑩"  # match the numbered markers on the difference image
+
+
 def _finding_lines(findings: list[dict], thresholds: Thresholds, floor: float) -> list[str]:
     lines = []
-    for f in findings[:MAX_LISTED_FINDINGS]:
+    for i, f in enumerate(findings[:MAX_LISTED_FINDINGS]):
         small = _grade(f["magnitude_mm"], 0.0, floor, thresholds) == "micro"
-        lines.append(f"  - {f['what']}" + (" *(micro)*" if small else ""))
+        lines.append(f"  - {_NUMBERS[i]} {f['what']}" + (" *(micro)*" if small else ""))
     if len(findings) > MAX_LISTED_FINDINGS:
         rest = findings[MAX_LISTED_FINDINGS:]
         lines.append(f"  - …and {len(rest)} smaller difference{'s' if len(rest) > 1 else ''} "
@@ -191,8 +195,137 @@ def _finding_lines(findings: list[dict], thresholds: Thresholds, floor: float) -
     return lines
 
 
+_AXIS_NAMES = {(1, 0, 0): "X", (0, 1, 0): "Y", (0, 0, 1): "Z"}
+
+
+def _axis_text(axis) -> str:
+    for vec, name in _AXIS_NAMES.items():
+        if all(abs(a - v) < 1e-9 for a, v in zip(axis, vec)):
+            return name
+    return "(" + ", ".join(f"{a:.3f}" for a in axis) + ")"
+
+
+def motion_text(motion: dict, floor: float = 0.0) -> str:
+    """'+5.000 mm X', 'by (1.250, -3.500, 7.000) mm, rotated 30° about (0.577, 0.577, 0.577)'."""
+    t = motion["translation"]
+    moving = [i for i, v in enumerate(t) if abs(v) > max(floor, 1e-12)]
+    parts = []
+    if len(moving) == 1:
+        parts.append(f"{fmt_len(t[moving[0]], signed=True)} {'XYZ'[moving[0]]}")
+    elif moving:
+        d = max(3, decimals_for(min(abs(t[i]) for i in moving)))
+        parts.append("by (" + ", ".join(f"{v:+.{d}f}" for v in t) + ") mm")
+    if motion["rotation_deg"]:
+        parts.append(f"rotated {motion['rotation_deg']:.4g}° about {_axis_text(motion['axis'])}")
+    return ", ".join(parts) or "repositioned"
+
+
 def _limit_text(precise: dict) -> str:
     return f"{precise['method']}; detection limit: {precise['floor_note']}"
+
+
+@dataclass
+class Section:
+    """One file's part of the report."""
+
+    path: str
+    old_path: str | None
+    status: str  # new | deleted | changed | moved | micro | identical | unchanged
+    suffix: str  # what follows the file name in its heading, e.g. " (changed)"
+    lines: list[str]  # the body, as markdown bullets
+    headline: str = ""  # one line for the summary table
+    largest_mm: float | None = None
+
+    def heading(self, html_names: bool = False) -> str:
+        if html_names:
+            name = f"<code>{escape(self.path)}</code>"
+            if self.old_path and self.old_path != self.path:
+                name += f" (renamed from <code>{escape(self.old_path)}</code>)"
+            return name + escape(self.suffix)
+        return _title(self.path, self.old_path) + self.suffix
+
+    def markdown(self) -> str:
+        return "\n".join([f"### {self.heading()}", *self.lines])
+
+
+def _headline(findings: list[dict], rows: list[str]) -> str:
+    if findings:
+        return findings[0]["what"]
+    return rows[0][2:] if rows else ""
+
+
+def file_section(
+    path: str,
+    old: dict | None,
+    new: dict | None,
+    thresholds: Thresholds = DEFAULT_THRESHOLDS,
+    old_path: str | None = None,
+    precise: dict | None = None,
+) -> Section | None:
+    """Classify one file's change and build its report section (None if neither version exists).
+
+    precise: theseus.diff.PreciseDiff.to_dict() for the two versions, when available. Without
+    it only aggregate metrics are compared, and small differences are listed as notes under
+    "no significant change".
+    """
+    if old is None and new is None:
+        return None
+
+    if old is None:
+        dims = _fmt_dims(_dims(new))
+        return Section(path, old_path, "new", " (new file)", [*_summary_lines(new), *_warning_lines(new)],
+                       headline=f"new — {_vol(new['volume_mm3'])}, {dims}")
+
+    if new is None:
+        was = f"{_vol(old['volume_mm3'])}, {_fmt_dims(_dims(old))}, {old['solid_count']} solid(s)"
+        return Section(path, old_path, "deleted", " (deleted)", [f"- Was: {was}"], headline=f"deleted (was {was})")
+
+    floor = precise["floor_mm"] if precise else 0.0
+    scale = max(max(abs(v) for v in old["bbox"]), max(abs(v) for v in new["bbox"]), 1.0)
+    rows, micro = _metric_rows(old, new, thresholds, max(floor, scale * 1e-12))
+    info = _info_lines(old, new)
+    warnings = _warning_lines(new)
+
+    if precise is None:
+        if not rows:
+            return Section(path, old_path, "unchanged", " — no significant change",
+                           [*info, *[f"- {m} (below noise threshold)" for m in micro], *warnings],
+                           headline="no significant change")
+        return Section(path, old_path, "changed", " (changed)", [*rows, *info, *warnings], headline=_headline([], rows))
+
+    findings = sorted(precise["findings"], key=lambda f: -f["magnitude_mm"])
+    notes = [f"- {n}" for n in precise.get("notes", [])]
+    if precise["identical"] and not rows:
+        # Metric differences above the floor can't coexist with identical geometry; whatever
+        # remains is integration noise, so the precise verdict stands.
+        within = "byte-for-byte" if precise["method"] == "byte-identical" else \
+            f"to within {fmt_len(precise['floor_mm'])}, {precise['method']}"
+        return Section(path, old_path, "identical", f" — identical ({within})", [*notes, *info, *warnings],
+                       headline="identical" + (" (re-export)" if precise["method"] != "byte-identical" else ""))
+
+    if precise.get("motion"):
+        how = (f"identical once moved back — {precise['method']}, "
+               f"detection limit {fmt_len(precise['floor_mm'])}")
+        moved = motion_text(precise["motion"], floor)
+        return Section(path, old_path, "moved", f" — moved ({moved}; shape unchanged)",
+                       [f"- Shape: {how}", *info, *warnings], headline=f"moved {moved}, shape unchanged")
+
+    largest = max([precise["max_deviation_mm"]] + [f["magnitude_mm"] for f in findings])
+    changed_findings = [f for f in findings if _grade(f["magnitude_mm"], 0.0, floor, thresholds) == "changed"]
+    geometry = []
+    if findings:
+        n = len(findings)
+        geometry = [f"- Geometry: {n} difference{'s' if n > 1 else ''} ({_limit_text(precise)}):",
+                    *_finding_lines(findings, thresholds, floor)]
+    if rows or changed_findings:
+        return Section(path, old_path, "changed", " (changed)",
+                       [*rows, *geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings],
+                       headline=_headline(findings, rows), largest_mm=largest)
+
+    suffix = (f" — micro-change only (largest {fmt_len(largest)}, under the "
+              f"{fmt_len(thresholds.abs_mm)} reporting threshold)")
+    return Section(path, old_path, "micro", suffix, [*geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings],
+                   headline=_headline(findings, rows), largest_mm=largest)
 
 
 def diff_one_file(
@@ -203,77 +336,69 @@ def diff_one_file(
     old_path: str | None = None,
     precise: dict | None = None,
 ) -> str:
-    """Return a markdown section describing the change to a single file.
+    """Return a markdown section describing the change to a single file (see file_section)."""
+    section = file_section(path, old, new, thresholds, old_path, precise)
+    return section.markdown() if section else ""
 
-    old_path: the file's previous path, when it was renamed.
-    precise: theseus.diff.PreciseDiff.to_dict() for the two versions, when available. Without
-    it only aggregate metrics are compared, and small differences are listed as notes under
-    "no significant change".
-    """
-    if old is None and new is None:
-        return ""
-    title = _title(path, old_path)
 
-    if old is None:
-        return "\n".join([f"### {title} (new file)", *_summary_lines(new), *_warning_lines(new)])
+# Order of files in the summary: what needs a reviewer's eyes first.
+_STATUS_ORDER = ["changed", "moved", "new", "deleted", "micro", "unchanged", "identical"]
+_STATUS_LABEL = {"changed": "**changed**", "moved": "moved", "new": "new", "deleted": "deleted",
+                 "micro": "micro-change", "unchanged": "no significant change", "identical": "identical"}
+_OPEN = {"changed", "moved", "new", "deleted"}  # sections expanded by default
+_HEADLINE_CHARS = 110
 
-    if new is None:
-        was = f"{_vol(old['volume_mm3'])}, {_fmt_dims(_dims(old))}, {old['solid_count']} solid(s)"
-        return "\n".join([f"### {title} (deleted)", f"- Was: {was}"])
 
-    floor = precise["floor_mm"] if precise else 0.0
-    scale = max(max(abs(v) for v in old["bbox"]), max(abs(v) for v in new["bbox"]), 1.0)
-    rows, micro = _metric_rows(old, new, thresholds, max(floor, scale * 1e-12))
-    info = _info_lines(old, new)
-    warnings = _warning_lines(new)
+def _cell(text: str) -> str:
+    text = text if len(text) <= _HEADLINE_CHARS else text[: _HEADLINE_CHARS - 1] + "…"
+    return text.replace("|", "\\|").replace("\n", " ")
 
-    if precise is None:
-        if not rows:
-            header = f"### {title} — no significant change"
-            return "\n".join([header, *info, *[f"- {m} (below noise threshold)" for m in micro], *warnings])
-        return "\n".join([f"### {title} (changed)", *rows, *info, *warnings])
 
-    findings = sorted(precise["findings"], key=lambda f: -f["magnitude_mm"])
-    notes = [f"- {n}" for n in precise.get("notes", [])]
-    if precise["identical"] and not rows:
-        # Metric differences above the floor can't coexist with identical geometry; whatever
-        # remains is integration noise, so the precise verdict stands.
-        within = "byte-for-byte" if precise["method"] == "byte-identical" else \
-            f"to within {fmt_len(precise['floor_mm'])}, {precise['method']}"
-        return "\n".join([f"### {title} — identical ({within})", *notes, *info, *warnings])
-
-    changed_findings = [f for f in findings if _grade(f["magnitude_mm"], 0.0, floor, thresholds) == "changed"]
-    geometry = []
-    if findings:
-        n = len(findings)
-        geometry = [f"- Geometry: {n} difference{'s' if n > 1 else ''} ({_limit_text(precise)}):",
-                    *_finding_lines(findings, thresholds, floor)]
-    if rows or changed_findings:
-        return "\n".join([f"### {title} (changed)", *rows, *geometry, *[f"- {m}" for m in micro],
-                          *notes, *info, *warnings])
-
-    largest = max([precise["max_deviation_mm"]] + [f["magnitude_mm"] for f in findings])
-    header = (f"### {title} — micro-change only (largest {fmt_len(largest)}, under the "
-              f"{fmt_len(thresholds.abs_mm)} reporting threshold)")
-    return "\n".join([header, *geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings])
+def _image_block(images: dict[str, str]) -> list[str]:
+    shown = [(label, images[key]) for key, label in (("before", "Before"), ("after", "After"), ("diff", "Difference"))
+             if key in images]
+    if not shown:
+        return []
+    lines = ["", "| " + " | ".join(label for label, _ in shown) + " |",
+             "|" + ":-:|" * len(shown),
+             "| " + " | ".join(f"[![{label}]({url})]({url})" for label, url in shown) + " |", ""]
+    extras = [f"[{label}]({images[key]})" for key, label in (("views", "standard views"), ("viewer", "interactive 3D viewer"))
+              if key in images]
+    if extras:
+        lines += ["Also: " + " · ".join(extras), ""]
+    return lines
 
 
 def build_report(
     results: dict[str, tuple],
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     renamed_from: dict[str, str] | None = None,
+    images: dict[str, dict[str, str]] | None = None,
+    footer: str | None = None,
 ) -> str:
     """results: path -> (old_metrics_or_None, new_metrics_or_None[, precise_or_None]).
-    renamed_from: new path -> old path, for files renamed in this change."""
+    renamed_from: new path -> old path, for files renamed in this change.
+    images: path -> {"before"/"after"/"diff"/"views"/"viewer": URL or relative path}.
+    footer: a closing note (e.g. where to download images that couldn't be shown inline)."""
     renamed_from = renamed_from or {}
-    sections = [
-        diff_one_file(path, value[0], value[1], thresholds, renamed_from.get(path),
-                      value[2] if len(value) > 2 else None)
-        for path, value in results.items()
-    ]
-    sections = [s for s in sections if s]
+    images = images or {}
+    sections = [file_section(path, value[0], value[1], thresholds, renamed_from.get(path),
+                             value[2] if len(value) > 2 else None)
+                for path, value in results.items()]
+    sections = sorted((s for s in sections if s), key=lambda s: _STATUS_ORDER.index(s.status))
 
-    header = REPORT_MARKER + "\n## theseus report\n"
+    out = [REPORT_MARKER, "## theseus report", ""]
     if not sections:
-        return header + "\nNo CAD file changes to report.\n"
-    return header + "\n" + "\n\n".join(sections) + "\n"
+        out.append("No CAD file changes to report.")
+    else:
+        out += ["| File | Result | Largest difference | What changed |", "|---|---|---|---|"]
+        for s in sections:
+            largest = fmt_len(s.largest_mm) if s.largest_mm else "—"
+            out.append(f"| `{_cell(s.path)}` | {_STATUS_LABEL[s.status]} | {largest} | {_cell(s.headline)} |")
+        for s in sections:
+            out += ["", f"<details{' open' if s.status in _OPEN else ''}>",
+                    f"<summary>{s.heading(html_names=True)}</summary>", "",
+                    *_image_block(images.get(s.path, {})), *s.lines, "", "</details>"]
+    if footer:
+        out += ["", footer]
+    return "\n".join(out) + "\n"

@@ -5,6 +5,32 @@ resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`
 
 ## 1.1.0 — unreleased
 
+### See the change
+- Before / after / difference images for every changed file, inline in the PR comment. Added
+  material is green and removed material red (exact OpenCascade booleans for B-reps, manifold3d
+  for closed meshes); changes too small to see as material — down to a micron — are shown as a
+  signed deviation map with a scale bar, numbered markers and a zoomed detail inset.
+- A sheet of standard views (front, top, right, isometric) per file, and an interactive 3D viewer
+  page: before / after / overlay / difference, section plane, measuring, click-to-fly findings.
+- Rigid-motion detection: a part that was only translated or rotated reads as
+  "moved (+5.000 mm X; shape unchanged)" — proven by an exact comparison after moving it back,
+  never guessed. Metrics now include the inertia tensor.
+- New comment layout: a summary table (file, result, largest difference, what changed), then one
+  expandable section per file; findings are numbered ①②③ to match the image markers.
+- Images are hosted on an orphan `theseus-assets` branch through the Git Data API (one folder per
+  PR, replaced on each push; concurrent runs retry instead of clobbering). Without
+  `contents: write` or on fork PRs they fall back to the `theseus-images` workflow artifact.
+  Action input `images: inline|artifact|off`; CLI `--images DIR`.
+- Headless CAD-style rendering with VTK (model edges, not triangle edges; one orthographic camera
+  shared by all of a file's images), starting a private Xvfb when there's no display, with a
+  depth-sorted matplotlib fallback.
+- Pictures never cost the text report: each file's analysis is saved before its images are drawn,
+  so a renderer crash or timeout leaves the file in the report with "images unavailable — text
+  report only". VTK is tried once in a throwaway process before being used, so a stale `$DISPLAY`
+  falls back to the matplotlib renderer instead of crashing the CLI.
+- Fixed: `rtree` (needed by the precise diff) was missing from the declared dependencies, so a
+  fresh install failed on mesh comparisons.
+
 ### Precise geometric diff
 - Two versions are now compared geometrically, not just by volume/bounding box/centre of mass:
   exact B-reps face by face (surface type and parameters — plane offset, cylinder axis and

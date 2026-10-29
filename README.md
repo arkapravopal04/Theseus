@@ -6,24 +6,35 @@ BREP, STL, 3MF, OBJ, PLY, OFF or GLB file geometrically, and reports every diffe
 its location and size, down to the precision the files themselves can represent. It runs as
 a CLI, or as an automatic, always-current comment on pull requests that touch CAD files.
 
+| Before | After | Difference |
+|:-:|:-:|:-:|
+| ![Before](docs/example-before.png) | ![After](docs/example-after.png) | ![Difference](docs/example-diff.png) |
+
 ```
-### `bracket.step` (changed)
+bracket.step (changed)
 - Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
-  - cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
-  - 2 vertices moved, added or removed — largest 0.500 mm at (54.500, 25.000, 10.000)
-  - 2 faces with unchanged surfaces re-trimmed by neighbouring changes (largest boundary shift 2.5 µm, plane z = 10.000) *(micro)*
-
-### `plate.step` — micro-change only (largest 1.0 µm, under the 10.0 µm reporting threshold)
-- Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
-  - plane x = 200.0000 → 200.0010 — +1.0 µm *(micro)*
+  - ① cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
+  - ② 2 vertices moved, added or removed — largest 0.500 mm at (54.500, 25.000, 10.000)
   ...
-
-### `housing.step` — identical (to within 0.1 nm, exact B-rep)
-- file contents differ but the geometry is identical (re-export or metadata change)
 ```
 
 That hole moved 0.5 mm without changing the part's volume or bounding box — a numbers-only
-diff would call it unchanged.
+diff would call it unchanged. A **1 µm** change is still unmissable, with a zoomed detail:
+
+![A 1 µm face offset, shown as a deviation map with a zoomed detail](docs/example-micro.png)
+
+Every PR comment starts with a summary of what changed, then one expandable section per file:
+
+| File | Result | Largest difference | What changed |
+|---|---|---|---|
+| `bracket.step` | **changed** | 0.500 mm | cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm |
+| `mount.step` | moved | — | moved +5.000 mm X, shape unchanged |
+| `plate.step` | micro-change | 1.0 µm | plane x = 200.0000 → 200.0010 — +1.0 µm |
+| `housing.step` | identical | — | identical (re-export) |
+
+Each file also gets a sheet of standard views (front, top, right, isometric) and an interactive
+3D viewer — rotate, switch between before / after / overlay / difference, slice with a section
+plane, measure, and click a finding to fly to it.
 
 ## Why
 
@@ -58,7 +69,7 @@ on:
       - '**.[oO][bB][jJ]'
       - '**.[oO][fF][fF]'
 permissions:
-  contents: read
+  contents: write        # images are stored on a separate `theseus-assets` branch
   pull-requests: write
 jobs:
   review:
@@ -74,10 +85,17 @@ isn't in the checkout and the old version of each file can't be read. Every PR t
 CAD file gets one comment, which is updated in place on each push rather than re-posted. The
 full report is also written to the workflow run's summary page.
 
+`contents: write` lets theseus put the report images on an orphan `theseus-assets` branch (one
+folder per PR, replaced on each push; your branches are never touched) so they show inline in
+the comment. Without it — or on PRs from forks, whose token is read-only — the images, standard
+views and 3D viewer are attached to the workflow run as the `theseus-images` artifact instead,
+and the comment links there. Use `images: artifact` to always do that, or `images: off`.
+
 Optional inputs (`with:`):
 
 | Input | Default | |
 |---|---|---|
+| `images` | `inline` | `inline`: images in the comment (needs `contents: write`); `artifact`: only in the run's artifact; `off`: text only |
 | `sensitivity` | `engineering` | When a difference counts as *changed* rather than a *micro-change*: `engineering` (10 µm or 0.1%), `fine` (1 µm or 0.01%), `exact` (anything above the detection limit) |
 | `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
 | `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
@@ -97,6 +115,9 @@ pip install git+https://github.com/arkapravopal04/theseus.git
 ```bash
 theseus old.step new.step --out report.md --png preview.png
 ```
+
+`--images DIR` writes the before / after / difference images, the standard-views sheet and the
+interactive `viewer.html` into `DIR`, and the report links them.
 
 `old` may be omitted to just report on a single (new) file. `--glb` also exports a `.glb` mesh —
 commit it to GitHub for a free interactive rotate/zoom viewer, no CAD software needed. `--units in`
@@ -157,8 +178,13 @@ format, assumed mm").
    malformed file that crashes or hangs the geometry kernel becomes one "Skipped" line, not a
    failed run. Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
 4. The geometry is compared face by face (or surface to surface for meshes — see
-   [Precision](#precision)), alongside volume, area, bounding box and centre of mass.
-5. Everything is formatted as one markdown comment, edited in place on each push.
+   [Precision](#precision)), alongside volume, area, bounding box and centre of mass. A part
+   whose volume, area and moments of inertia are unchanged is tested for a rigid move: the
+   old version, moved, must match the new one exactly before it's reported as "moved".
+5. Images are rendered headless (VTK, on a private virtual display when there's no screen;
+   a matplotlib fallback otherwise): added material in green, removed in red, or — for changes
+   too small to see as material — a deviation map with a scale bar and a zoomed detail.
+6. Everything is formatted as one markdown comment, edited in place on each push.
 
 ## Limitations
 
@@ -175,7 +201,12 @@ format, assumed mm").
 - **"Volume", not "mass".** CAD exchange files carry no density, so nothing here is a mass or
   weight calculation.
 - **Fork PRs** get a read-only token, so the comment can't be posted; the report is still in the
-  run summary.
+  run summary, and the images in the run's artifact.
+- **Inline images on private repositories** are linked from the `theseus-assets` branch; whether
+  GitHub displays them in comments for private repos hasn't been verified yet. If they don't
+  show, use `images: artifact`.
+- **The 3D viewer loads three.js from jsDelivr**, so opening it needs an internet connection the
+  first time.
 
 ## License
 

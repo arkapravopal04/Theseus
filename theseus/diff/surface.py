@@ -105,12 +105,12 @@ def _regions(points: np.ndarray, dev: np.ndarray, radius: float) -> list[Finding
         members = [m for m in tree.query_ball_point(points[i], radius) if not claimed[m]]
         claimed[members] = True
         findings.append(Finding(f"surfaces differ by up to {fmt_len(float(dev[i]))} near {fmt_point(points[i])}",
-                                float(dev[i]), tuple(map(float, points[i]))))
+                                float(dev[i]), tuple(map(float, points[i])), "region"))
         if len(findings) == MAX_REGIONS:
             remaining = int((~claimed).sum())
             if remaining:
                 findings.append(Finding(f"…and {remaining} more differing sample points elsewhere",
-                                        float(dev[~claimed].max()), None))
+                                        float(dev[~claimed].max()), None, "region"))
             break
     return findings
 
@@ -207,3 +207,83 @@ def compare_surfaces(old: Model, new: Model) -> PreciseDiff:
     kinds = "exact B-rep vs mesh" if "brep" in (old.kind, new.kind) else "mesh vs mesh"
     return PreciseDiff(f"surface deviation ({kinds})", floor_max, why, identical=not off.any(),
                        max_deviation_mm=float(devs.max(initial=0)), findings=findings)
+
+
+MAX_COLOURED_VERTICES = 200_000
+_MAX_REFINE_PASSES = 10
+
+
+def _snap(vertices: np.ndarray, owners: np.ndarray, side: _Side) -> np.ndarray:
+    """Project points onto the true surface of the B-rep face each came from (a midpoint of a
+    chord across a curved face would otherwise read as a deviation)."""
+    out = vertices.copy()
+    for k, owner in enumerate(owners):
+        surface = side.surfaces[owner]
+        if surface is None:
+            continue  # planar: the midpoint is already on the face
+        proj = GeomAPI_ProjectPointOnSurf(gp_Pnt(*vertices[k]), surface)
+        if proj.NbPoints():
+            p = proj.NearestPoint()
+            out[k] = (p.X(), p.Y(), p.Z())
+    return out
+
+
+def signed_deviation(old: Model, new: Model, deflection: float,
+                     max_edge: float | None = None) -> tuple[trimesh.Trimesh, np.ndarray, np.ndarray]:
+    """The new surface as triangles, with each vertex's signed distance from the old surface
+    (positive outside it — material added; negative inside — material removed) and the
+    per-vertex limit below which that distance is noise. Used to colour deviation maps.
+
+    With max_edge, triangles whose colour would change across them are split (down to edges of
+    max_edge) so colours stay where the deviation is instead of smearing across long flat
+    triangles. Unchanged areas — most of a part — are left alone.
+    """
+    old_side, new_side = _side(old, deflection), _side(new, deflection)
+    scale = max(float(np.abs(new_side.mesh.vertices).max(initial=0)),
+                float(np.abs(old_side.mesh.vertices).max(initial=0)), 1.0)
+    float_floor = max(scale * _FLOAT32_REL, 1e-9)
+    old_error = chord_errors(old_side.mesh)
+
+    def measure(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        sample = np.arange(len(points))
+        if len(points) > MAX_COLOURED_VERTICES:
+            # Very large meshes: measure a sample; every other point takes its nearest sample's value.
+            sample = np.sort(np.random.default_rng(0).choice(len(points), MAX_COLOURED_VERTICES, replace=False))
+        pts = points[sample]
+        closest, dist, tri = trimesh.proximity.closest_point(old_side.mesh, pts)
+        if old_side.surfaces is not None:
+            dist, limit = _exact_distance(pts, dist, tri, old_side, old_error, float_floor)
+        else:
+            limit = old_error[tri] + float_floor
+        sign = np.sign(np.einsum("ij,ij->i", pts - closest, old_side.mesh.face_normals[tri]))
+        signed = np.where(sign < 0, -dist, dist)
+        if len(sample) < len(points):
+            _, nearest = cKDTree(pts).query(points)
+            signed, limit = signed[nearest], limit[nearest]
+        return signed, limit
+
+    vertices, faces = np.asarray(new_side.mesh.vertices), np.asarray(new_side.mesh.faces)
+    owners = new_side.owners if new_side.surfaces is not None else None
+    signed, limit = measure(vertices)
+    for _ in range(_MAX_REFINE_PASSES if max_edge else 0):
+        values = signed[faces]
+        varies = values.max(axis=1) - values.min(axis=1) > limit[faces].max(axis=1)
+        tri = vertices[faces]
+        longest = np.linalg.norm(tri - np.roll(tri, 1, axis=1), axis=2).max(axis=1)
+        pick = np.nonzero(varies & (longest > max_edge))[0]
+        if not len(pick):
+            break
+        new_vertices, new_faces = trimesh.remesh.subdivide(vertices, faces, face_index=pick)
+        added = np.arange(len(vertices), len(new_vertices))
+        if owners is not None:
+            # Unpicked faces keep their order; each picked face's 4 children are appended in order.
+            kept = np.ones(len(faces), dtype=bool)
+            kept[pick] = False
+            owners = np.concatenate([owners[kept], np.repeat(owners[pick], 4)])
+            vertex_owner = np.empty(len(new_vertices), dtype=int)
+            vertex_owner[new_faces.ravel()] = np.repeat(owners, 3)
+            new_vertices[added] = _snap(new_vertices[added], vertex_owner[added], new_side)
+        more_signed, more_limit = measure(new_vertices[added])
+        vertices, faces = new_vertices, new_faces
+        signed, limit = np.concatenate([signed, more_signed]), np.concatenate([limit, more_limit])
+    return trimesh.Trimesh(vertices, faces, process=False), signed, limit

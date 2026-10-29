@@ -11,7 +11,8 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
 from theseus.cli import EXIT_ERROR, EXIT_OK, main
 from theseus.export import export_mesh
 from theseus.load import load_model
-from theseus.render import render_preview
+from theseus.render import display, render_preview
+from theseus.render.scene import Camera
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 
@@ -63,14 +64,33 @@ def _silhouette_aspect(png_path) -> float:
     return (np.ptp(xs) + 1) / (np.ptp(ys) + 1)
 
 
-def test_preview_keeps_proportions(tmp_path):
+def _projected_aspect(size) -> float:
+    corners = np.array([[x, y, z] for x in (0, size[0]) for y in (0, size[1]) for z in (0, size[2])])
+    p = Camera.fit((0, 0, 0), size).project(corners)
+    return np.ptp(p[:, 0]) / np.ptp(p[:, 1])
+
+
+@pytest.mark.parametrize("renderer", ["vtk", "mpl"])
+def test_preview_keeps_proportions(tmp_path, monkeypatch, renderer):
     """Regression: render.py called ndarray.ptp(), which NumPy 2 removed, inside a blanket
     `except AttributeError` — so the equal-aspect setting silently never ran and every part
-    was drawn squashed into a cube. A 100x10x10 bar drawn as a cube has a silhouette of ~1.1:1;
-    drawn correctly it's ~2.7:1 from the default viewpoint."""
+    was drawn squashed into a cube. The bar's silhouette must match what the camera predicts
+    for a 100x10x10 bar, not for a cube."""
+    monkeypatch.setenv("THESEUS_RENDERER", renderer)
+    monkeypatch.setattr(display, "_backend", None)
     out = tmp_path / "bar.png"
     render_preview(BRepPrimAPI_MakeBox(100, 10, 10).Shape(), str(out))
-    assert _silhouette_aspect(out) > 2
+    assert _silhouette_aspect(out) == pytest.approx(_projected_aspect((100, 10, 10)), rel=0.05)
+    assert abs(_silhouette_aspect(out) - _projected_aspect((10, 10, 10))) > 0.5
+
+
+def test_broken_display_falls_back_instead_of_crashing(monkeypatch):
+    """VTK segfaults on a display it can't use (e.g. a stale $DISPLAY from SSH); in-process that
+    would kill the CLI, so the backend is checked in a throwaway process first."""
+    monkeypatch.delenv("THESEUS_RENDERER", raising=False)
+    monkeypatch.setenv("DISPLAY", ":987")  # nothing is listening there
+    monkeypatch.setattr(display, "_backend", None)
+    assert display.backend() == "mpl"
 
 
 def test_preview_of_a_mesh(tmp_path):
@@ -86,3 +106,14 @@ def test_glb_export_is_in_metres(tmp_path):
     export_mesh(load_model(fixture("cube20.step")), str(out))
     extents = trimesh.load(out, force="mesh").extents
     assert extents == pytest.approx((0.02, 0.02, 0.02), rel=1e-6)
+
+
+def test_images_flag_writes_and_links_images(tmp_path):
+    out = tmp_path / "report.md"
+    args = [fixture("cube20.step"), fixture("bracket_fillets.step"), "--out", str(out), "--images", str(tmp_path / "img")]
+    assert main(args) == EXIT_OK
+    assert sorted(os.listdir(tmp_path / "img")) == ["after.png", "before.png", "diff.png", "viewer.html", "views.png"]
+    report = out.read_text(encoding="utf-8")
+    assert "[![Difference](img/diff.png)](img/diff.png)" in report
+    assert "[standard views](img/views.png)" in report
+    assert "[interactive 3D viewer](img/viewer.html)" in report

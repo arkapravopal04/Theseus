@@ -17,6 +17,9 @@ dependencies = [
     "scipy",
     "networkx",
     "lxml",
+    "rtree",
+    "manifold3d",
+    "vtk",
 ]
 
 [project.urls]
