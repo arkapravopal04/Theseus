@@ -52,10 +52,16 @@ theseus works the way you already work. Install it once, then pick whichever fit
 
 theseus runs on Windows, macOS and Linux with Python 3.11 or newer. If you don't have Python,
 get it from [python.org](https://www.python.org/downloads/) (on Windows, tick "Add python.exe
-to PATH"), then:
+to PATH"), then (on macOS and Linux, type `python3` instead of `python`):
 
 ```bash
-pip install pipx
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Open a new terminal (so the PATH change takes effect), then:
+
+```bash
 pipx install theseus-cad
 ```
 
