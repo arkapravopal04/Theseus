@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import trimesh
 
-from theseus.model import Model
+from theseus.model import Model, part_of
 
 GREY = (0.78, 0.80, 0.84)
 EDGE_COLOUR = (0.12, 0.13, 0.16)
@@ -169,9 +169,11 @@ def model_layer(model: Model, deflection: float | None = None, colour=GREY, opac
 
     if deflection is None:
         deflection = default_deflection(*model_bounds(model))
-    vertices, faces = extract_mesh(model, deflection)
     if model.kind == "mesh":
+        vertices, faces = extract_mesh(model, deflection)
         edges = mesh_feature_edges(model.mesh)
     else:
-        edges = brep_edges(model.shape, deflection)
+        part = part_of(model.shape)
+        vertices, faces = extract_mesh(part, deflection)
+        edges = brep_edges(part, deflection)
     return Layer(vertices, faces, colour, opacity, edges)

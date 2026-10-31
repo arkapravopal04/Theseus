@@ -84,6 +84,72 @@ def test_moved_and_modified_is_not_a_move(tmp_path, base):
     assert "(changed)" in diff_one_file("p", r["old"], r["new"], precise=r["precise"])
 
 
+def chiral():
+    """A plate with one corner notched: no symmetry plane, so its mirror image is a different part."""
+    notch = BRepPrimAPI_MakeBox(gp_Pnt(-1, -1, 5), gp_Pnt(20, 10, 11)).Shape()
+    return BRepAlgoAPI_Cut(plate(), notch).Shape()
+
+
+def mirrored(shape, plane_point=(0, 0, 0), normal=(0, 0, 1)):
+    t = gp_Trsf()
+    t.SetMirror(gp_Ax2(gp_Pnt(*plane_point), gp_Dir(*normal)))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+def test_mirror_image_gets_a_mirror_verdict(tmp_path):
+    r = analyze(step(chiral(), tmp_path / "a.step"), step(mirrored(chiral()), tmp_path / "b.step"))
+    mirror = r["precise"]["motion"]["mirror"]
+    assert mirror["normal"] == pytest.approx([0, 0, 1], abs=1e-9)
+    assert mirror["turn_deg"] == 0
+    section = diff_one_file("p", r["old"], r["new"], precise=r["precise"])
+    assert "— mirrored (about XY; opposite hand)" in section
+
+
+def test_mirror_plane_away_from_the_origin_is_located(tmp_path):
+    r = analyze(step(chiral(), tmp_path / "a.step"),
+                step(mirrored(chiral(), (0, 0, 7)), tmp_path / "b.step"))
+    assert r["precise"]["motion"]["mirror"]["offset"] == pytest.approx(7, abs=1e-6)
+    assert "about XY at z = 7.000" in diff_one_file("p", r["old"], r["new"], precise=r["precise"])
+
+
+def test_mirrored_and_moved_is_still_a_mirror(tmp_path):
+    r = analyze(step(chiral(), tmp_path / "a.step"),
+                step(moved(mirrored(chiral()), (5, 3, 0), 30, (0, 0, 1)), tmp_path / "b.step"))
+    assert r["precise"]["motion"]["mirror"]
+    assert "— mirrored (" in diff_one_file("p", r["old"], r["new"], precise=r["precise"])
+
+
+def test_mirrored_and_slid_says_so(tmp_path):
+    r = analyze(step(chiral(), tmp_path / "a.step"), step(moved(mirrored(chiral()), (5, 3, 0)), tmp_path / "b.step"))
+    assert "mirrored (about XY, then moved by (+5.000, +3.000, +0.000) mm; opposite hand)" in \
+        diff_one_file("p", r["old"], r["new"], precise=r["precise"])
+
+
+def test_symmetric_part_mirrored_reads_as_moved_not_mirrored(tmp_path, base):
+    """The holed plate has a symmetry plane, so its mirror image is the same part, relocated."""
+    r = analyze(base, step(mirrored(plate()), tmp_path / "n.step"))
+    assert "mirror" not in r["precise"]["motion"]
+
+
+def test_mirrored_and_modified_is_not_a_mirror_verdict(tmp_path):
+    other = BRepAlgoAPI_Cut(mirrored(chiral()), BRepPrimAPI_MakeCylinder(
+        gp_Ax2(gp_Pnt(150, 25, -11), gp_Dir(0, 0, 1)), 3, 12).Shape()).Shape()
+    r = analyze(step(chiral(), tmp_path / "a.step"), step(other, tmp_path / "b.step"))
+    assert not (r["precise"].get("motion") or {}).get("mirror")
+
+
+def test_mirrored_mesh(tmp_path):
+    mesh = trimesh.creation.box((40, 20, 10))
+    corner = trimesh.creation.box((5, 5, 5))
+    corner.apply_translation((18, 8, 4))
+    chiral_mesh = trimesh.util.concatenate([mesh, corner])
+    chiral_mesh.export(tmp_path / "a.stl")
+    flipped = chiral_mesh.copy()
+    flipped.apply_transform(trimesh.transformations.reflection_matrix((0, 0, 0), (0, 0, 1)))
+    flipped.export(tmp_path / "b.stl")
+    assert (analyze(tmp_path / "a.stl", tmp_path / "b.stl")["precise"]["motion"] or {}).get("mirror")
+
+
 def test_mesh_move(tmp_path):
     box = trimesh.creation.box((40, 20, 10))
     box.export(tmp_path / "a.stl")

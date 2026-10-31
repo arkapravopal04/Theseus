@@ -3,7 +3,40 @@
 Releases are tagged `vX.Y.Z`; the floating `v1` tag (what `uses: arkapravopal04/theseus@v1`
 resolves to) is moved to each new 1.x release by `.github/workflows/release.yml`.
 
-## 1.1.0 — unreleased
+## 1.2.0 — unreleased
+
+### Smarter diffs
+- Mirror images get their own verdict ("mirrored about XY; opposite hand"), proved the same way as
+  a move. A part with a symmetry plane is its own mirror image, so it still reads as moved.
+- A part moved or mirrored as well as edited is lined up first, so the report lists the edit rather
+  than every face. The report states the transform and how much of the part then agrees, and
+  declines to line up when the fit isn't clearly good.
+- Holes and fillets are named: "through hole along Z Ø8.000 → 10.000", "blind hole … depth 12.000 →
+  15.000", counterbores, countersinks, "removed fillet R3.000". A hole split into two half cylinders
+  by an exporter is one hole. Unrecognised faces are reported as before.
+
+### Fixed (found on real exports)
+- A plane at exactly 45° could read as a large offset change on an unchanged face.
+- A face split differently by another exporter no longer reads as added or removed. A part differing
+  only that way reads "same geometry, its faces divided differently".
+- Annotation and construction geometry in a STEP file (sheets, wires, PMI points) no longer counts
+  towards the bounding box or the comparison, and isn't drawn. A change in the count of open bodies
+  still shows.
+- A trimmed spline face's bounding box is now the face's, not the whole surface it was cut from.
+- Spline faces no longer report large deviations caused by a projection settling on the wrong spot.
+- A boolean that crashes or hangs in the geometry kernel now costs only the material picture: it runs
+  in its own process with a time limit, and the difference image falls back to a deviation map.
+- `theseus OLD NEW --images` draws the lined-up version, and titles the 3D viewer with the file's name.
+- STEP files holding only triangles (AP242 tessellated) are compared as meshes, rather than reporting
+  a volume of 0 and a bounding box of -inf, or crashing.
+- Comparing plainly different spline faces is several times faster, and a part that turns out to have
+  moved is no longer measured finely before being lined up.
+- A file hitting its time limit could hang: the limit now also ends the processes it started. The
+  default limit is now 600 s, for all of one file: loading, comparing and drawing.
+- An added or removed face reports how far the geometry really moved, not the face's size. Features
+  are only reported as changed if measurably off the other version.
+
+## 1.1.0 — never tagged
 
 ### Use it however you work
 - `theseus app`: drop two versions of a part into a browser window and get the report — no

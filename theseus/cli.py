@@ -278,7 +278,9 @@ def _legacy(argv: list[str]) -> int:
         print(f"error: {e}", file=sys.stderr)
         return EXIT_ERROR
 
-    result = analyze_models(old_model, new_model)
+    models = {"old": old_model, "new": new_model}  # the old version may get lined up with the new one
+    result = analyze_models(old_model, new_model, models)
+    old_model = models["old"]
     if result["precise_error"]:
         print(f"warning: {result['precise_error']} — reporting metrics only", file=sys.stderr)
     try:
@@ -286,7 +288,8 @@ def _legacy(argv: list[str]) -> int:
         if args.images:
             from theseus.images import render_file_images
 
-            files = render_file_images(old_model, new_model, result["precise"], args.images, title=args.new)
+            files = render_file_images(old_model, new_model, result["precise"], args.images,
+                                       title=os.path.basename(args.new))
             report_dir = os.path.dirname(os.path.abspath(args.out))
             images = {args.new: {kind: os.path.relpath(os.path.join(args.images, f), report_dir).replace(os.sep, "/")
                                  for kind, f in files.items()}}

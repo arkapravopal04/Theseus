@@ -20,7 +20,7 @@ import theseus
 # GitHub Action runs from a checkout of this repo, with the workspace as its cwd).
 _PACKAGE_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(theseus.__file__)))
 
-DEFAULT_TIMEOUT_S = 300
+DEFAULT_TIMEOUT_S = 600  # for all of one file: loading, comparing, and drawing
 
 
 def _failure(message: str, old_path: str | None, new_path: str | None) -> dict:
@@ -61,6 +61,29 @@ def _crash_name(returncode: int) -> str | None:
     return None
 
 
+def run_with_timeout(cmd: list[str], timeout: float, env: dict | None = None) -> subprocess.CompletedProcess:
+    """subprocess.run(capture_output=True, timeout=...), except that a timeout kills the child's own
+    children too. Killing only the child leaves them holding its output pipes (the worker runs
+    booleans in a process of their own), and waiting on those pipes would then hang for as long as
+    they live, which the timeout exists to prevent. Raises subprocess.TimeoutExpired, like run()."""
+    posix = os.name == "posix"
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, start_new_session=posix)
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        if posix:
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        else:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True, check=False)
+        proc.kill()
+        proc.communicate()
+        raise
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
 def analyze_isolated(
     old_path: str | None, new_path: str | None, timeout: float = DEFAULT_TIMEOUT_S, assume_units: str | None = None,
     image_dir: str | None = None, title: str | None = None,
@@ -79,7 +102,7 @@ def analyze_isolated(
             if value:
                 cmd += [flag, value]
         try:
-            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, env=env)
+            proc = run_with_timeout(cmd, timeout, env)
         except subprocess.TimeoutExpired:
             saved = _saved_analysis(out, f"rendering timed out after {timeout:g}s — text report only")
             return saved or _failure(f"timed out after {timeout:g}s while loading", old_path, new_path)

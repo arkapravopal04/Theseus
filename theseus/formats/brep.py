@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from OCP.BRep import BRep_Builder
+import numpy as np
+import trimesh
+from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
 from OCP.BRepTools import BRepTools
 from OCP.gp import gp_Pnt, gp_Trsf
@@ -10,7 +12,10 @@ from OCP.IFSelect import IFSelect_RetDone
 from OCP.IGESControl import IGESControl_Reader
 from OCP.OCP.collections import Sequence_TCollection_AsciiString
 from OCP.STEPControl import STEPControl_Reader
-from OCP.TopoDS import TopoDS_Shape
+from OCP.TopAbs import TopAbs_FACE, TopAbs_REVERSED
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopLoc import TopLoc_Location
+from OCP.TopoDS import TopoDS, TopoDS_Shape
 
 from theseus.model import LoadError, Model
 
@@ -43,12 +48,46 @@ def _transfer(reader, path: str) -> TopoDS_Shape:
     return reader.OneShape()
 
 
+def triangles_only(shape: TopoDS_Shape) -> tuple[np.ndarray, np.ndarray] | None:
+    """(vertices, faces) if the shape's faces are all triangles with no exact surface behind them
+    (AP242 tessellated geometry), else None. Such a "B-rep" has nothing for exact maths to work on."""
+    vertices, faces = [], []
+    exp = TopExp_Explorer(shape, TopAbs_FACE)
+    while exp.More():
+        face = TopoDS.Face(exp.Current())
+        exp.Next()
+        loc = TopLoc_Location()
+        tri = BRep_Tool.Triangulation_s(face, loc)
+        if BRep_Tool.Surface_s(face) is not None or tri is None:
+            return None
+        trsf = loc.Transformation()
+        base = len(vertices)
+        for i in range(1, tri.NbNodes() + 1):
+            p = tri.Node(i).Transformed(trsf)
+            vertices.append((p.X(), p.Y(), p.Z()))
+        for i in range(1, tri.NbTriangles() + 1):
+            n1, n2, n3 = tri.Triangle(i).Get()
+            if face.Orientation() == TopAbs_REVERSED:
+                n2, n3 = n3, n2
+            faces.append((base + n1 - 1, base + n2 - 1, base + n3 - 1))
+    return (np.array(vertices), np.array(faces, dtype=int)) if faces else None
+
+
 def load_step(path: str, fmt: str, assume_units: str | None) -> Model:
     reader = STEPControl_Reader()
     shape = _transfer(reader, path)
     lengths = Sequence_TCollection_AsciiString()
     reader.FileUnits(lengths, Sequence_TCollection_AsciiString(), Sequence_TCollection_AsciiString())
     file_unit = next((s.ToCString() for s in lengths), None)
+    triangles = triangles_only(shape)
+    if triangles is not None:
+        from theseus.formats.mesh import _orient_bodies
+
+        mesh, bodies, _ = _orient_bodies(trimesh.Trimesh(*triangles))
+        model = Model(path, fmt, "mesh", mesh=mesh, units_note=_units_note(file_unit), bodies=bodies,
+                      mm_per_file_unit=_mm_per_unit(file_unit))
+        model.warnings.append("this STEP file holds triangles only (tessellated), so it's compared as a mesh")
+        return model
     return Model(path, fmt, "brep", shape=shape, units_note=_units_note(file_unit),
                  mm_per_file_unit=_mm_per_unit(file_unit))
 

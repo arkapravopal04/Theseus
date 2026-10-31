@@ -5,8 +5,8 @@ branding:
   color: 'blue'
 inputs:
   timeout-seconds:
-    description: 'Seconds allowed to load one version of one file before it is skipped'
-    default: '300'
+    description: 'Seconds allowed for one file: loading, comparing and drawing'
+    default: '600'
   max-file-mb:
     description: 'Skip files larger than this many megabytes'
     default: '50'

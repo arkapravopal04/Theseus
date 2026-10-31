@@ -214,17 +214,16 @@ else:
 
 
 def test_isolated_crash_is_reported_per_version(monkeypatch):
-    import subprocess as sp
     import sys
 
     from theseus import isolate
 
-    real_run = sp.run
+    real_run = isolate.run_with_timeout
 
-    def segfaulting_child(cmd, **kwargs):
-        return real_run([sys.executable, "-c", SEGFAULT], **kwargs)
+    def segfaulting_child(cmd, timeout, env=None):
+        return real_run([sys.executable, "-c", SEGFAULT], timeout, env)
 
-    monkeypatch.setattr(isolate.subprocess, "run", segfaulting_child)
+    monkeypatch.setattr(isolate, "run_with_timeout", segfaulting_child)
     result = isolate.analyze_isolated(None, fixture("cube20.step"))
     assert "crashed" in result["new_error"] and CRASH_NAME in result["new_error"]
     assert result["old_error"] is None
@@ -233,20 +232,19 @@ def test_isolated_crash_is_reported_per_version(monkeypatch):
 def _saving_then(action: str):
     """A stand-in worker that saves a real analysis to its result file, as the worker does before
     drawing images, and then runs `action` (dies, or hangs) as if rendering went wrong."""
-    import subprocess as sp
     import sys
 
     from theseus.analyze import analyze_models
+    from theseus.isolate import run_with_timeout
     from theseus.load import load_model
 
     analysis = analyze_models(load_model(fixture("cube20.step")), load_model(fixture("bracket_fillets.step")))
     analysis.update(old_error=None, new_error=None, not_cad=False, images={}, images_error=None)
-    real_run = sp.run
 
-    def child(cmd, **kwargs):
+    def child(cmd, timeout, env=None):
         out = cmd[3]  # python -m theseus._worker <result.json> ...
         script = f"import time\nopen({out!r}, 'w', encoding='utf-8').write({json.dumps(analysis)!r})\n{action}"
-        return real_run([sys.executable, "-c", script], **kwargs)
+        return run_with_timeout([sys.executable, "-c", script], timeout, env)
 
     return child
 
@@ -254,7 +252,7 @@ def _saving_then(action: str):
 def test_renderer_crash_keeps_the_analysis(monkeypatch):
     from theseus import isolate
 
-    monkeypatch.setattr(isolate.subprocess, "run", _saving_then(SEGFAULT))
+    monkeypatch.setattr(isolate, "run_with_timeout", _saving_then(SEGFAULT))
     result = isolate.analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), image_dir="unused")
     assert result["old_error"] is None and result["new_error"] is None
     assert result["new"]["volume_mm3"] == pytest.approx(7340.362, abs=1e-3)
@@ -265,7 +263,7 @@ def test_renderer_crash_keeps_the_analysis(monkeypatch):
 def test_renderer_exception_keeps_the_analysis(monkeypatch):
     from theseus import isolate
 
-    monkeypatch.setattr(isolate.subprocess, "run", _saving_then("raise RuntimeError('no GL context')"))
+    monkeypatch.setattr(isolate, "run_with_timeout", _saving_then("raise RuntimeError('no GL context')"))
     result = isolate.analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), image_dir="unused")
     assert result["new"]["volume_mm3"] == pytest.approx(7340.362, abs=1e-3)
     assert "rendering failed: RuntimeError: no GL context" in result["images_error"]
@@ -274,7 +272,7 @@ def test_renderer_exception_keeps_the_analysis(monkeypatch):
 def test_renderer_timeout_keeps_the_analysis(monkeypatch):
     from theseus import isolate
 
-    monkeypatch.setattr(isolate.subprocess, "run", _saving_then("time.sleep(30)"))
+    monkeypatch.setattr(isolate, "run_with_timeout", _saving_then("time.sleep(30)"))
     result = isolate.analyze_isolated(fixture("cube20.step"), fixture("bracket_fillets.step"), timeout=3,
                                       image_dir="unused")
     assert result["old_error"] is None and result["new_error"] is None

@@ -109,7 +109,7 @@ def test_sensitivity_presets(tmp_path, base):
 def test_hole_diameter_change_of_2_microns(tmp_path, base):
     new = write_step(plate(hole_r=4.001), tmp_path / "new.step")
     precise = analyze(base, new)["precise"]
-    hole = next(f for f in precise["findings"] if f["what"].startswith("cylinder"))
+    hole = next(f for f in precise["findings"] if f["what"].startswith("through hole"))
     assert "Ø8.0000 → 8.0020" in hole["what"] and "Ø +2.0 µm" in hole["what"]
     assert hole["at"][0] == pytest.approx(50, abs=5)  # located at the hole
 
@@ -120,7 +120,7 @@ def test_hole_moved_with_volume_unchanged(tmp_path, base):
     r = analyze(base, new)
     assert r["new"]["volume_mm3"] == pytest.approx(r["old"]["volume_mm3"], rel=1e-12)
     assert r["new"]["bbox"] == pytest.approx(r["old"]["bbox"])
-    hole = next(f for f in r["precise"]["findings"] if f["what"].startswith("cylinder"))
+    hole = next(f for f in r["precise"]["findings"] if f["what"].startswith("through hole"))
     assert "(50.000, 25.000) → (50.500, 25.000)" in hole["what"] and "axis moved 0.500 mm" in hole["what"]
     assert "(changed)" in diff_one_file("part", r["old"], r["new"], precise=r["precise"])
 
@@ -134,7 +134,7 @@ def test_the_changed_hole_leads_the_report(tmp_path, base):
     r = analyze(base, new)
     assert [f["kind"] for f in r["precise"]["findings"]][-2:] == ["vertices", "retrim"]
     section = file_section("part", r["old"], r["new"], precise=r["precise"])
-    assert section.headline.startswith("cylinder along Z Ø8.000 → 8.500")
+    assert section.headline.startswith("through hole along Z Ø8.000 → 8.500")
     assert section.largest_mm == pytest.approx(0.75, abs=1e-6)  # still the true largest difference
 
 

@@ -18,7 +18,28 @@ from theseus.metrics import compute_metrics
 from theseus.model import Model
 
 
-def analyze_models(old: Model | None, new: Model | None) -> dict:
+def _try_alignment(old: Model, new: Model, result: dict, models: dict | None) -> None:
+    """If the part was moved or mirrored as well as edited, report the edit: replace the
+    comparison, and the old version's metrics and model, with their lined-up equivalents."""
+    from theseus.diff.align import compare_aligned
+
+    aligned = compare_aligned(old, new, len(result["precise"]["findings"]), result["precise"]["max_deviation_mm"])
+    if aligned is None:
+        return
+    moved, precise, alignment = aligned
+    if precise.identical:
+        # Only a move after all, one a little too rough for detect_motion's exact fit.
+        result["precise"]["motion"] = alignment.to_dict()
+        return
+    result["precise"] = {**precise.to_dict(), "motion": None, "alignment": alignment.to_dict()}
+    result["old"] = compute_metrics(moved)
+    if models is not None:
+        models["old"] = moved
+
+
+def analyze_models(old: Model | None, new: Model | None, models: dict | None = None) -> dict:
+    """models: if given, models["old"] is replaced when the old version gets aligned to the new
+    one, so the pictures show the same comparison as the text."""
     result = {
         "old": compute_metrics(old) if old else None,
         "new": compute_metrics(new) if new else None,
@@ -26,15 +47,33 @@ def analyze_models(old: Model | None, new: Model | None) -> dict:
         "precise_error": None,
     }
     if old and new:
+        # A quick first look decides what to compare: measuring every spline face of a part that
+        # turns out to have moved takes minutes, all thrown away. Only what's reported is measured finely.
+        exact = old.kind == new.kind == "brep"
         try:
-            result["precise"] = precise_diff(old, new).to_dict()
+            result["precise"] = precise_diff(old, new, coarse=exact).to_dict()
         except Exception as e:  # noqa: BLE001 — the metrics diff still stands without it
             result["precise_error"] = f"precise comparison failed: {type(e).__name__}: {e}"
-        if result["precise"] and not result["precise"]["identical"]:
-            try:
-                result["precise"]["motion"] = detect_motion(old, new, result["old"], result["new"])
-            except Exception:  # noqa: BLE001 — not knowing it moved just means reporting it as changed
-                result["precise"]["motion"] = None
+        if result["precise"] and result["precise"]["method"] != "byte-identical":
+            first_look_differs = not result["precise"]["identical"]
+            if first_look_differs:
+                try:
+                    result["precise"]["motion"] = detect_motion(old, new, result["old"], result["new"])
+                except Exception:  # noqa: BLE001 — not knowing it moved just means reporting it as changed
+                    result["precise"]["motion"] = None
+                if not result["precise"]["motion"]:
+                    try:
+                        _try_alignment(old, new, result, models)
+                    except Exception:  # noqa: BLE001 — the unaligned comparison still stands
+                        pass
+            if exact and not result["precise"].get("motion") and "alignment" not in result["precise"]:
+                try:
+                    result["precise"] = precise_diff(old, new).to_dict()
+                except Exception as e:  # noqa: BLE001 — as above
+                    result["precise"], result["precise_error"] = None, f"precise comparison failed: {type(e).__name__}: {e}"
+                else:
+                    if first_look_differs:
+                        result["precise"]["motion"] = None
     return result
 
 
@@ -63,7 +102,7 @@ def analyze_pair(old_path: str | None, new_path: str | None,
         except Exception as e:  # noqa: BLE001 — any loader bug should become one skipped file
             errors[side] = f"unexpected {type(e).__name__}: {e}"
 
-    result = analyze_models(models["old"], models["new"])
+    result = analyze_models(models["old"], models["new"], models)
     result.update(old_error=errors["old"], new_error=errors["new"], not_cad=bool(present) and not_cad == present,
                   images={}, images_error=None)
     return result, models

@@ -18,7 +18,7 @@ import numpy as np
 from matplotlib.colors import LinearSegmentedColormap
 
 from theseus.fmt import fmt_len
-from theseus.model import Model
+from theseus.model import Model, part_of
 from theseus.render.scene import (
     GREY,
     Layer,
@@ -39,6 +39,7 @@ MICRO_FRACTION = 0.01  # changes smaller than this share of the part's size are 
 
 
 DETAIL_BELOW = 0.04  # a change smaller than this share of the part gets a zoomed detail inset
+BOOLEAN_TIMEOUT_S = 60  # past this, show a deviation map instead of waiting for material booleans
 
 
 @dataclass
@@ -90,6 +91,44 @@ def _brep_cut(a, b, fuzzy: float):
     return op.Shape()
 
 
+def _brep_cuts_isolated(a, b, fuzzy: float) -> tuple[object, object]:
+    """(a - b, b - a), cut in a child process: a crash or hang there raises here, and costs only
+    the material picture (see theseus._boolean_worker)."""
+    import os
+    import subprocess
+    import sys
+    import tempfile
+
+    from OCP.BRep import BRep_Builder
+    from OCP.BRepTools import BRepTools
+    from OCP.TopoDS import TopoDS_Shape
+
+    import theseus
+    from theseus.isolate import run_with_timeout
+
+    env = dict(os.environ)
+    package_parent = os.path.dirname(os.path.dirname(os.path.abspath(theseus.__file__)))
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (package_parent, env.get("PYTHONPATH")) if p)
+    with tempfile.TemporaryDirectory() as tmp:
+        a_path, b_path, a_b, b_a = (os.path.join(tmp, f"{name}.brep") for name in ("a", "b", "a_b", "b_a"))
+        BRepTools.Write_s(a, a_path)
+        BRepTools.Write_s(b, b_path)
+        try:
+            proc = run_with_timeout([sys.executable, "-m", "theseus._boolean_worker", a_path, b_path, a_b, b_a, repr(fuzzy)],
+                                    BOOLEAN_TIMEOUT_S, env)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"took over {BOOLEAN_TIMEOUT_S} s") from None
+        if proc.returncode != 0:
+            raise RuntimeError("the geometry kernel could not cut these shapes")
+        results = []
+        for path in (a_b, b_a):
+            shape = TopoDS_Shape()
+            if not BRepTools.Read_s(shape, path, BRep_Builder()):
+                raise RuntimeError("boolean result could not be read")
+            results.append(shape)
+    return results[0], results[1]
+
+
 def _solid_pieces(shape, min_thickness: float) -> tuple[object, float]:
     """The solids of a boolean result that are real material, not fuzzy-tolerance slivers:
     (compound of them, their total volume)."""
@@ -121,8 +160,9 @@ def _solid_pieces(shape, min_thickness: float) -> tuple[object, float]:
 
 def _brep_booleans(old: Model, new: Model, scale: float) -> tuple[list[Layer], float, float]:
     fuzzy = max(scale * 1e-6, 1e-6)
-    added, added_vol = _solid_pieces(_brep_cut(new.shape, old.shape, fuzzy), 4 * fuzzy)
-    removed, removed_vol = _solid_pieces(_brep_cut(old.shape, new.shape, fuzzy), 4 * fuzzy)
+    removed_shape, added_shape = _brep_cuts_isolated(part_of(old.shape), part_of(new.shape), fuzzy)
+    added, added_vol = _solid_pieces(added_shape, 4 * fuzzy)
+    removed, removed_vol = _solid_pieces(removed_shape, 4 * fuzzy)
     layers = []
     for shape, colour in ((removed, REMOVED), (added, ADDED)):
         piece = Model(path="", format="brep", kind="brep", shape=shape)
@@ -172,7 +212,7 @@ def _deviation_layers(old: Model, new: Model, size: float, floor: float) -> tupl
     mesh, signed, limit = signed_deviation(old, new, deflection, max_edge=size / 150)
     signed = np.where(np.abs(signed) <= np.maximum(limit, floor), 0.0, signed)
     span = max(float(np.abs(signed).max(initial=0)), floor * 3, 1e-9)
-    edges = brep_edges(new.shape, deflection) if new.kind == "brep" else mesh_feature_edges(mesh)
+    edges = brep_edges(part_of(new.shape), deflection) if new.kind == "brep" else mesh_feature_edges(mesh)
     layer = Layer(np.asarray(mesh.vertices), np.asarray(mesh.faces), edges=edges, scalars=signed,
                   colormap=DEVIATION_MAP, value_range=(-span, span))
     bar = ScaleBar(DEVIATION_MAP, (-span, span), "deviation",

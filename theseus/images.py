@@ -59,7 +59,8 @@ def render_file_images(old: Model | None, new: Model | None, precise: dict | Non
         if precise and precise.get("motion"):
             markers = []  # the face-by-face findings of a moved part are just the move itself
             layers = [model_layer(old, deflection, colour=REMOVED, opacity=0.3), model_layer(new, deflection)]
-            legend, scale_bar, detail, diff_title = [(REMOVED, "before (ghost)"), ((0.78, 0.80, 0.84), "after")], None, None, "Moved"
+            diff_title = "Mirrored" if precise["motion"].get("mirror") else "Moved"
+            legend, scale_bar, detail = [(REMOVED, "before (ghost)"), ((0.78, 0.80, 0.84), "after")], None, None
         else:
             visual = diff_visual(old, new, precise)
             layers, legend, scale_bar, detail = visual.layers, visual.legend, visual.scale_bar, visual.detail

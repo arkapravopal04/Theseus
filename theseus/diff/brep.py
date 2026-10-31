@@ -24,6 +24,8 @@ from OCP.Bnd import Bnd_Box
 from OCP.BRep import BRep_Tool
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeVertex
+from OCP.BRepExtrema import BRepExtrema_DistShapeShape
 from OCP.BRepGProp import BRepGProp
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.GeomAbs import (
@@ -45,7 +47,7 @@ from scipy.spatial import cKDTree
 
 from theseus.diff import Finding, PreciseDiff
 from theseus.fmt import decimals_for, fmt_len, fmt_point
-from theseus.model import Model
+from theseus.model import Model, skin_of
 
 KERNEL_PRECISION_MM = 1e-7  # OCCT's Precision::Confusion()
 _TYPE_NAMES = {
@@ -54,6 +56,13 @@ _TYPE_NAMES = {
 }
 _AXES = {(1, 0, 0): "X", (0, 1, 0): "Y", (0, 0, 1): "Z"}
 _MAX_SAMPLES_PER_FREEFORM_FACE = 200
+_MAX_DEVIATION_CHECKS = 5
+_MAX_VERTEX_CHECKS = 40
+_POINTS_PER_FACE = 8
+_MAX_MEASURED_UNPARTNERED = 150
+_MAX_SAME_FACE_TILT = math.radians(30)
+_COARSE_SAMPLE_STEP = 10
+_PLAINLY_DIFFERENT_MM = 0.1
 
 
 # --- detection limit -------------------------------------------------------------------
@@ -107,7 +116,8 @@ def _canonical_dir(v: np.ndarray) -> np.ndarray:
     """A direction with its sign fixed (largest component positive), so an axis and its
     reverse compare equal — face orientation isn't a geometric change."""
     v = v / np.linalg.norm(v)
-    return -v if v[np.argmax(np.abs(v))] < 0 else v
+    # Rounded: at a tie (a face at 45°) float noise mustn't decide which component rules the sign.
+    return -v if v[np.argmax(np.round(np.abs(v), 6))] < 0 else v
 
 
 def _vec(d) -> np.ndarray:
@@ -116,7 +126,7 @@ def _vec(d) -> np.ndarray:
 
 def _axis_name(axis: np.ndarray) -> str | None:
     for vec, name in _AXES.items():
-        if np.allclose(axis, vec, atol=1e-9):
+        if np.allclose(axis, vec, atol=1e-6):  # as loose as a lined-up part's fit noise can leave it
             return name
     return None
 
@@ -178,6 +188,19 @@ def _param(name: str, value: str) -> str:
 def _unique(shape: TopoDS_Shape, kind) -> list:
     shapes = ShapeMap()
     TopExp.MapShapes_s(shape, kind, shapes)
+    return [shapes.FindKey(i) for i in range(1, shapes.Extent() + 1)]
+
+
+def _in_bodies(shape: TopoDS_Shape, kind) -> list:
+    """Sub-shapes of the part itself. STEP files also carry annotation and construction geometry
+    (sheets, wires, points for PMI): when there are solids, they're the part; otherwise the faces
+    are, unless there's nothing but wires. A change in open bodies still shows, as their count."""
+    if kind == TopAbs_SOLID:
+        return _unique(shape, kind)
+    containers = _unique(shape, TopAbs_SOLID) or _unique(shape, TopAbs_FACE) or [shape]
+    shapes = ShapeMap()
+    for container in containers:
+        TopExp.MapShapes_s(container, kind, shapes)
     return [shapes.FindKey(i) for i in range(1, shapes.Extent() + 1)]
 
 
@@ -277,15 +300,33 @@ def _face_points(face, deflection: float) -> np.ndarray:
     return np.array([[p.X(), p.Y(), p.Z()] for p in pts])
 
 
-def _freeform_deviation(a: Face, b: Face, deflection: float) -> tuple[float, np.ndarray | None]:
-    """Largest distance from points on face b to face a's surface (and where)."""
+def _freeform_deviation(a: Face, b: Face, deflection: float, floor: float = 0.0,
+                        coarse: bool = False) -> tuple[float, np.ndarray | None]:
+    """Largest distance from points on face b to face a (and where).
+
+    Projecting a point onto a spline surface can settle on a local minimum and report a distance
+    far larger than the true one, so the worst points are confirmed against the face itself."""
     surface = BRep_Tool.Surface_s(a.face)
-    worst, where = 0.0, None
-    for p in _face_points(b.face, deflection):
-        proj = GeomAPI_ProjectPointOnSurf(gp_Pnt(*p), surface)
-        if proj.NbPoints() and proj.LowerDistance() > worst:
-            worst, where = proj.LowerDistance(), p
-    return worst, where
+
+    def worst_of(points: np.ndarray) -> tuple[float, np.ndarray | None]:
+        suspects = []
+        for p in points:
+            proj = GeomAPI_ProjectPointOnSurf(gp_Pnt(*p), surface)
+            if proj.NbPoints() and proj.LowerDistance() > floor:
+                suspects.append((proj.LowerDistance(), p))
+        suspects.sort(key=lambda s: -s[0])
+        worst, where = 0.0, None
+        for _, p in suspects[:_MAX_DEVIATION_CHECKS]:
+            extrema = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(*p)).Vertex(), a.face)
+            if extrema.IsDone() and extrema.Value() > worst:
+                worst, where = extrema.Value(), p
+        return worst, where
+
+    # Plainly different faces (a part that moved has hundreds) don't need the fine measurement,
+    # and on a big spline part it's what takes the minutes.
+    points = _face_points(b.face, deflection)
+    worst, where = worst_of(points[:: _COARSE_SAMPLE_STEP])
+    return (worst, where) if coarse or worst > _PLAINLY_DIFFERENT_MM else worst_of(points)
 
 
 _ANALYTIC = ("plane", "cylinder", "cone", "sphere", "torus")
@@ -334,6 +375,10 @@ def _match(old: list[Face], new: list[Face]) -> tuple[list[tuple[int, int]], lis
                 # Too far apart to be the same face moved — it's a removed face and an added one.
                 if dist > 2 * max(a.size, b.size) + 1e-6:
                     continue
+                # Likewise a round face turned far off its own axis: it's a different hole.
+                if a.type != "plane" and a.axis is not None and b.axis is not None \
+                        and _angle(a.axis, b.axis) > _MAX_SAME_FACE_TILT:
+                    continue
                 cost = dist + _surface_distance(a, b) + abs(a.area - b.area) / (4 * max(a.size, b.size, 1e-9))
                 candidates.append((cost, old_idx[hit], j))
 
@@ -352,7 +397,7 @@ def _match(old: list[Face], new: list[Face]) -> tuple[list[tuple[int, int]], lis
 
 def _vertices(shape) -> tuple[np.ndarray, np.ndarray]:
     pts, tols = [], []
-    for v in _unique(shape, TopAbs_VERTEX):
+    for v in _in_bodies(shape, TopAbs_VERTEX):
         vertex = TopoDS.Vertex(v)
         p = BRep_Tool.Pnt_s(vertex)
         pts.append((p.X(), p.Y(), p.Z()))
@@ -366,32 +411,102 @@ def _vertex_findings(old_shape, new_shape, floor: float) -> list[Finding]:
     if not len(op) or not len(np_):
         return []
     count, worst, worst_at = 0, 0.0, None
-    for src, src_tol, dst, dst_tol in ((np_, nt, op, ot), (op, ot, np_, nt)):
+    for src, src_tol, dst, dst_tol, other in ((np_, nt, op, ot, old_shape), (op, ot, np_, nt, new_shape)):
         dist, idx = cKDTree(dst).query(src)
         off = dist > np.maximum(np.maximum(src_tol, dst_tol[idx]), floor)
-        count = max(count, int(off.sum()))
-        if off.any() and dist[off].max() > worst:
-            i = int(np.argmax(np.where(off, dist, -1)))
-            worst, worst_at = float(dist[i]), src[i]
-    if not count:
+        # A vertex with no counterpart that still lies on the other version's geometry only splits
+        # an edge somewhere else: an exporter's choice, not a change. Farthest first, within reason.
+        candidates = np.nonzero(off)[0]
+        candidates = candidates[np.argsort(-dist[candidates])]
+        real = len(candidates) - min(len(candidates), _MAX_VERTEX_CHECKS)
+        part = skin_of(other)
+        for i in candidates[:_MAX_VERTEX_CHECKS]:
+            extrema = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(*src[i])).Vertex(), part)
+            if extrema.IsDone() and extrema.Value() <= max(src_tol[i], floor):
+                continue
+            real += 1
+            gap = extrema.Value() if extrema.IsDone() else float(dist[i])
+            if gap > worst:
+                worst, worst_at = gap, src[i]
+        count = max(count, real)
+    if not count or worst_at is None:
         return []
     return [Finding(f"{count} vert{'ex' if count == 1 else 'ices'} moved, added or removed — "
                     f"largest {fmt_len(worst)} at {fmt_point(worst_at)}", worst, tuple(map(float, worst_at)),
                     "vertices")]
 
 def _counts(shape) -> dict[str, int]:
-    return {name: len(_unique(shape, kind)) for name, kind in
+    return {name: len(_in_bodies(shape, kind)) for name, kind in
             (("solids", TopAbs_SOLID), ("faces", TopAbs_FACE), ("edges", TopAbs_EDGE), ("vertices", TopAbs_VERTEX))}
 
 
-def compare_breps(old: Model, new: Model) -> PreciseDiff:
+def inside_points(f: Face) -> list[np.ndarray]:
+    """Points on a face's true surface, away from its edges: mesh nodes won't do, as a cylinder's
+    are all on its end rims, which often lie on the neighbouring faces of any version of the part."""
+    BRepMesh_IncrementalMesh(f.face, max(f.size * 0.05, 1e-3))
+    loc = TopLoc_Location()
+    tri = BRep_Tool.Triangulation_s(f.face, loc)
+    if tri is None:
+        return []
+    trsf = loc.Transformation()
+    surface = BRep_Tool.Surface_s(f.face)
+    out = []
+    count = tri.NbTriangles()
+    for t in range(1, count + 1, max(1, count // _POINTS_PER_FACE)):
+        nodes = [tri.Node(n).Transformed(trsf) for n in tri.Triangle(t).Get()]
+        centre = gp_Pnt(sum(p.X() for p in nodes) / 3, sum(p.Y() for p in nodes) / 3, sum(p.Z() for p in nodes) / 3)
+        proj = GeomAPI_ProjectPointOnSurf(centre, surface)
+        if proj.NbPoints():
+            p = proj.NearestPoint()
+            out.append(np.array([p.X(), p.Y(), p.Z()]))
+    return out
+
+
+def face_gap(f: Face, other_skin) -> float:
+    """The farthest a face gets from another version's surface (see theseus.model.skin_of)."""
+    worst = 0.0
+    for p in inside_points(f):
+        extrema = BRepExtrema_DistShapeShape(BRepBuilderAPI_MakeVertex(gp_Pnt(*p)).Vertex(), other_skin)
+        if extrema.IsDone():
+            worst = max(worst, extrema.Value())
+    return worst
+
+
+def gap_tolerance(floor: float) -> float:
+    """A gap must clear this to count as a change: rounding in both versions can add up to the floor twice."""
+    return max(2 * floor, 1e-6)
+
+
+def _same_corners(a: Face, b: Face, floor: float) -> bool:
+    pa, pb = _vertices(a.face)[0], _vertices(b.face)[0]
+    if len(pa) != len(pb) or not len(pa):
+        return False
+    return float(cKDTree(pb).query(pa)[0].max()) <= max(floor, KERNEL_PRECISION_MM) * 10
+
+
+def _same_surface(a: Face, b: Face, floor: float) -> bool:
+    if a.type != b.type or a.type not in _ANALYTIC:
+        return False
+    return _surface_distance(a, b) <= max(floor, KERNEL_PRECISION_MM)
+
+
+def compare_breps(old: Model, new: Model, min_floor: float = 0.0, name_features: bool = True,
+                  coarse: bool = False) -> PreciseDiff:
+    """min_floor: a coarser detection limit imposed by the caller (the residual of an alignment).
+    name_features: off when only `identical` matters, which doesn't depend on the wording.
+    coarse: sample free-form faces sparsely, for a first look that may be thrown away (see
+    theseus.analyze). It can miss a small local deviation, so it's never the reported result."""
     floor, floor_note = detection_limit(old, new)
-    old_faces = [_describe_face(TopoDS.Face(f)) for f in _unique(old.shape, TopAbs_FACE)]
-    new_faces = [_describe_face(TopoDS.Face(f)) for f in _unique(new.shape, TopAbs_FACE)]
+    if min_floor > floor:
+        floor, floor_note = min_floor, f"how exactly the versions could be aligned ({fmt_len(min_floor)})"
+    old_faces = [_describe_face(TopoDS.Face(f)) for f in _in_bodies(old.shape, TopAbs_FACE)]
+    new_faces = [_describe_face(TopoDS.Face(f)) for f in _in_bodies(new.shape, TopAbs_FACE)]
     pairs, removed, added = _match(old_faces, new_faces)
 
-    findings: list[Finding] = []
-    retrimmed = []  # (boundary shift, face): same surface, different extent
+    # (finding, old face index or None, new face index or None): a feature found below can account
+    # for its faces' findings.
+    face_findings: list[tuple[Finding, int | None, int | None]] = []
+    retrimmed = []  # (boundary shift, face, old index, new index): same surface, different extent
     deflection = max(max([f.size for f in new_faces + old_faces] or [1.0]) * 1e-3, 1e-3)
 
     for i, j in pairs:
@@ -401,29 +516,75 @@ def compare_breps(old: Model, new: Model) -> PreciseDiff:
         if a.type in _ANALYTIC:
             changes = [(what, m) for what, m in _surface_changes(a, b) if abs(m) > floor]
             if changes:
-                findings.append(Finding(_change_text(a, b, changes, floor), max(abs(m) for _, m in changes),
-                                        tuple(map(float, b.centroid))))
+                face_findings.append((Finding(_change_text(a, b, changes, floor), max(abs(m) for _, m in changes),
+                                              tuple(map(float, b.centroid))), i, j))
                 continue
         elif shift > floor * 1e-2:
             # Free-form surface: no parameters to compare, so measure it. (Skipped when area and
             # centroid agree to far below the floor — an edit can't preserve both that exactly.)
-            dev, where = _freeform_deviation(a, b, deflection)
+            dev, where = _freeform_deviation(a, b, deflection, floor, coarse)
             if dev > floor:
-                findings.append(Finding(
+                face_findings.append((Finding(
                     f"{b.describe()} deviates by up to {fmt_len(dev)}" + (f" at {fmt_point(where)}" if where is not None else ""),
-                    dev, tuple(map(float, where)) if where is not None else None))
+                    dev, tuple(map(float, where)) if where is not None else None), i, j))
                 continue
-        if shift > floor:
-            retrimmed.append((shift, b))
+        # Same surface and the same corners: the centroid and area integrals of a trimmed spline
+        # just aren't that exact. Nothing moved.
+        if shift > floor and not _same_corners(a, b, floor):
+            retrimmed.append((shift, b, i, j))
 
+    # An unpartnered face on a surface the other version also has wasn't added or removed: the
+    # exporter split it differently (a hole as two halves), or it was trimmed into several pieces.
+    # Still counted, as re-trimmed; a real edit there also moves vertices and boundaries.
+    # The same goes for one measured to lie on the other version: it's that surface written another
+    # way (a plane as a spline). Otherwise its size is how far the geometry really moved, which isn't
+    # the size of the face: filling a 2 mm recess removes a 25 mm floor, but only moves it 2 mm.
+    # Measuring takes time, so the first look (which only has to count) and a part with very many
+    # unpartnered faces (which has plainly changed) go by the face's size instead.
+    tolerance = gap_tolerance(floor)
+    measure = not coarse and len(removed) + len(added) <= _MAX_MEASURED_UNPARTNERED
+    old_skin, new_skin = (skin_of(old.shape), skin_of(new.shape)) if measure and (removed or added) else (None, None)
     for i in removed:
         f = old_faces[i]
-        findings.append(Finding(f"removed face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid)),
-                                "removed"))
+        if any(_same_surface(f, g, floor) for g in new_faces):
+            gap = 0.0
+        else:
+            gap = face_gap(f, new_skin) if measure else f.size
+        if gap <= tolerance:
+            retrimmed.append((f.size, f, i, None))
+            continue
+        face_findings.append((Finding(f"removed face: {f.describe()} ({f.area:.3f} mm²)", gap,
+                                      tuple(map(float, f.centroid)), "removed"), i, None))
     for j in added:
         f = new_faces[j]
-        findings.append(Finding(f"added face: {f.describe()} ({f.area:.3f} mm²)", f.size, tuple(map(float, f.centroid)),
-                                "added"))
+        if any(_same_surface(f, g, floor) for g in old_faces):
+            gap = 0.0
+        else:
+            gap = face_gap(f, old_skin) if measure else f.size
+        if gap <= tolerance:
+            retrimmed.append((f.size, f, None, j))
+            continue
+        face_findings.append((Finding(f"added face: {f.describe()} ({f.area:.3f} mm²)", gap,
+                                      tuple(map(float, f.centroid)), "added"), None, j))
+
+    findings: list[Finding] = []
+    used_old: set[int] = set()
+    used_new: set[int] = set()
+    if name_features and not coarse and (face_findings or retrimmed):
+        try:
+            from theseus.diff.features import compare_features
+
+            findings, used_old, used_new = compare_features(old_faces, new_faces, old.shape, new.shape, floor)
+        except Exception:  # noqa: BLE001 — recognising features only improves the wording; the faces still stand
+            findings, used_old, used_new = [], set(), set()
+
+    def accounted(i: int | None, j: int | None) -> bool:
+        """A feature speaks for a change only if it covers both sides: a hole that became an
+        unrecognised notch leaves the notch's new face still to report."""
+        return (i is None or i in used_old) and (j is None or j in used_new)
+
+    findings += [f for f, i, j in face_findings if not accounted(i, j)]
+    retrimmed = [(shift, b) for shift, b, i, j in retrimmed if not accounted(i, j)]
     if retrimmed:
         shift, face = max(retrimmed, key=lambda t: t[0])
         findings.append(Finding(
@@ -439,6 +600,8 @@ def compare_breps(old: Model, new: Model) -> PreciseDiff:
         notes.append("topology: " + ", ".join(f"{k} {old_counts[k]} → {new_counts[k]}"
                                               for k in old_counts if old_counts[k] != new_counts[k]))
 
-    max_dev = max((f.magnitude_mm for f in findings), default=0.0)
+    # How far a re-trimmed face's boundary shifted says how it was cut up (a whole face against half
+    # of one reads as tens of mm), not how far the geometry moved.
+    max_dev = max((f.magnitude_mm for f in findings if f.kind != "retrim"), default=0.0)
     return PreciseDiff("exact B-rep", floor, floor_note, identical=not findings and old_counts == new_counts,
                        max_deviation_mm=max_dev, findings=findings, notes=notes)

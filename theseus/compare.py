@@ -201,7 +201,7 @@ _AXIS_NAMES = {(1, 0, 0): "X", (0, 1, 0): "Y", (0, 0, 1): "Z"}
 
 def _axis_text(axis) -> str:
     for vec, name in _AXIS_NAMES.items():
-        if all(abs(a - v) < 1e-9 for a, v in zip(axis, vec)):
+        if all(abs(a - v) < 1e-6 for a, v in zip(axis, vec)):
             return name
     return "(" + ", ".join(f"{a:.3f}" for a in axis) + ")"
 
@@ -221,6 +221,35 @@ def motion_text(motion: dict, floor: float = 0.0) -> str:
     return ", ".join(parts) or "repositioned"
 
 
+_PLANE_NAMES = {"X": "YZ", "Y": "XZ", "Z": "XY"}
+
+
+def mirror_text(mirror: dict, floor: float = 0.0) -> str:
+    """'about XY', 'about XY at z = 5.000', 'about the plane ⟂ (0.707, 0.707, 0.000), then turned 15°'."""
+    name = _axis_text(mirror["normal"])
+    if name in _PLANE_NAMES:
+        text = f"about {_PLANE_NAMES[name]}"
+        if abs(mirror["offset"]) > max(floor, 1e-9):
+            text += f" at {name.lower()} = {mirror['offset']:.{max(3, decimals_for(abs(mirror['offset'])))}f}"
+    else:
+        text = f"about the plane ⟂ {name}"
+    if mirror["turn_deg"]:
+        text += f", then turned {mirror['turn_deg']:.4g}°"
+    slide = mirror.get("slide", [0.0, 0.0, 0.0])
+    if any(abs(v) > max(floor, 1e-9) for v in slide):
+        moved = motion_text({"translation": slide, "rotation_deg": 0.0, "axis": [0, 0, 1]}, floor)
+        text += f", then moved {moved}"
+    return text
+
+
+def alignment_text(alignment: dict, floor: float = 0.0) -> str:
+    """'moved +5.000 mm X', 'mirrored about XY'."""
+    if alignment.get("mirror"):
+        return f"mirrored {mirror_text(alignment['mirror'], floor)}"
+    text = motion_text(alignment, floor)
+    return text if text.startswith("rotated") else f"moved {text}"
+
+
 def _limit_text(precise: dict) -> str:
     return f"{precise['method']}; detection limit: {precise['floor_note']}"
 
@@ -231,7 +260,7 @@ class Section:
 
     path: str
     old_path: str | None
-    status: str  # new | deleted | changed | moved | micro | identical | unchanged
+    status: str  # new | deleted | changed | mirrored | moved | micro | identical | unchanged
     suffix: str  # what follows the file name in its heading, e.g. " (changed)"
     lines: list[str]  # the body, as markdown bullets
     headline: str = ""  # one line for the summary table
@@ -304,6 +333,13 @@ def file_section(
         return Section(path, old_path, "identical", f" — identical ({within})", [*notes, *info, *warnings],
                        headline="identical" + (" (re-export)" if precise["method"] != "byte-identical" else ""))
 
+    if precise.get("motion") and precise["motion"].get("mirror"):
+        how = (f"identical to the old version's mirror image — {precise['method']}, "
+               f"detection limit {fmt_len(precise['floor_mm'])}")
+        mirrored = mirror_text(precise["motion"]["mirror"], floor)
+        return Section(path, old_path, "mirrored", f" — mirrored ({mirrored}; opposite hand)",
+                       [f"- Shape: {how}", *info, *warnings], headline=f"mirror image {mirrored}, opposite hand")
+
     if precise.get("motion"):
         how = (f"identical once moved back — {precise['method']}, "
                f"detection limit {fmt_len(precise['floor_mm'])}")
@@ -311,17 +347,40 @@ def file_section(
         return Section(path, old_path, "moved", f" — moved ({moved}; shape unchanged)",
                        [f"- Shape: {how}", *info, *warnings], headline=f"moved {moved}, shape unchanged")
 
-    largest = max([precise["max_deviation_mm"]] + [f["magnitude_mm"] for f in findings])
-    changed_findings = [f for f in findings if _grade(f["magnitude_mm"], 0.0, floor, thresholds) == "changed"]
+    # A re-trimmed face's boundary shift isn't a distance the geometry moved (see compare_breps).
+    measured = [f for f in findings if f.get("kind") != "retrim"]
+    largest = max([precise["max_deviation_mm"]] + [f["magnitude_mm"] for f in measured])
+    changed_findings = [f for f in measured if _grade(f["magnitude_mm"], 0.0, floor, thresholds) == "changed"]
+    alignment = precise.get("alignment")
+    if alignment:
+        how = alignment_text(alignment, floor)
+        notes.insert(0, f"- **Lined up first: {how}.** Everything else here compares the versions after that "
+                        f"({alignment['surface_share']:.0%} of the surface area and "
+                        f"{alignment['vertex_share']:.0%} of the vertices then agree exactly).")
     geometry = []
     if findings:
         n = len(findings)
         geometry = [f"- Geometry: {n} difference{'s' if n > 1 else ''} ({_limit_text(precise)}):",
                     *_finding_lines(findings, thresholds, floor)]
     if rows or changed_findings:
+        lead = [notes.pop(0)] if alignment else []
+        headline = _headline(findings, rows)
+        if alignment:
+            headline = f"{alignment_text(alignment, floor)}; then {headline}"
         return Section(path, old_path, "changed", " (changed)",
-                       [*rows, *geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings],
-                       headline=_headline(findings, rows), largest_mm=largest)
+                       [*lead, *rows, *geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings],
+                       headline=headline, largest_mm=largest)
+
+    if not measured and not micro and not alignment:
+        return Section(path, old_path, "identical", " — same geometry, its faces divided differently",
+                       [*geometry, *notes, *info, *warnings], headline="same geometry, faces divided differently")
+
+    if alignment and alignment.get("mirror"):
+        # Tiny differences don't make it a micro-change: it's the opposite hand.
+        mirrored = mirror_text(alignment["mirror"], floor)
+        return Section(path, old_path, "mirrored", f" — mirrored ({mirrored}; opposite hand; otherwise within {fmt_len(largest)})",
+                       [*geometry, *[f"- {m}" for m in micro], *notes, *info, *warnings],
+                       headline=f"mirror image {mirrored}, opposite hand", largest_mm=largest)
 
     suffix = (f" — micro-change only (largest {fmt_len(largest)}, under the "
               f"{fmt_len(thresholds.abs_mm)} reporting threshold)")
@@ -343,10 +402,10 @@ def diff_one_file(
 
 
 # Order of files in the summary: what needs a reviewer's eyes first.
-_STATUS_ORDER = ["changed", "moved", "new", "deleted", "micro", "unchanged", "identical"]
-_STATUS_LABEL = {"changed": "**changed**", "moved": "moved", "new": "new", "deleted": "deleted",
+_STATUS_ORDER = ["changed", "mirrored", "moved", "new", "deleted", "micro", "unchanged", "identical"]
+_STATUS_LABEL = {"changed": "**changed**", "mirrored": "**mirrored**", "moved": "moved", "new": "new", "deleted": "deleted",
                  "micro": "micro-change", "unchanged": "no significant change", "identical": "identical"}
-_OPEN = {"changed", "moved", "new", "deleted"}  # sections expanded by default
+_OPEN = {"changed", "mirrored", "moved", "new", "deleted"}  # sections expanded by default
 _HEADLINE_CHARS = 110
 
 

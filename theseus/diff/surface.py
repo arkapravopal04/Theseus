@@ -31,7 +31,7 @@ from theseus.diff import Finding, PreciseDiff
 from theseus.diff.brep import KERNEL_PRECISION_MM
 from theseus.fmt import fmt_len, fmt_point
 from theseus.mesh import tessellate
-from theseus.model import Model
+from theseus.model import Model, part_of
 
 MAX_SAMPLES = 50_000
 MAX_REGIONS = 5
@@ -57,7 +57,7 @@ def _side(model: Model, deflection: float) -> _Side:
         return _Side(model.mesh)
     # Mesh a copy: triangulations attach to the shape, and this fine one would otherwise be
     # inherited by previews and exports of the same model (slow to draw, huge to export).
-    shape = BRepBuilderAPI_Copy(model.shape, False, False).Shape()
+    shape = BRepBuilderAPI_Copy(part_of(model.shape), False, False).Shape()
     vertices, faces, owners, brep_faces = tessellate(shape, deflection)
     # process=True welds the per-face vertex copies; it keeps the face order, so owners still line up.
     surfaces = [None if BRepAdaptor_Surface(f, True).GetType() == GeomAbs_Plane else BRep_Tool.Surface_s(f)

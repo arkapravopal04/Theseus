@@ -8,7 +8,7 @@ sets these):
   PR_NUMBER            pull request to comment on; without it the report is only printed
                        and written to the job summary
   GH_TOKEN             token for `gh` (github.token is enough for same-repo PRs)
-  THESEUS_TIMEOUT      seconds allowed to load one file version (default 300)
+  THESEUS_TIMEOUT      seconds allowed for one file: loading, comparing, drawing (default 600)
   THESEUS_MAX_FILE_MB  skip files bigger than this (default 50)
   THESEUS_UNITS        length unit of unitless formats like STL (default: assume mm)
   THESEUS_SENSITIVITY  engineering (default) | fine | exact — how big a difference must be to

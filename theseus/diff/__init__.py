@@ -54,7 +54,10 @@ class PreciseDiff:
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        d["findings"] = report_order(d["findings"])[:MAX_FINDINGS]
+        # The cap applies to the individual changes: the summaries speak for all of them.
+        ordered = report_order(d["findings"])
+        d["findings"] = [f for f in ordered if f.get("kind") not in SUMMARY_KINDS][:MAX_FINDINGS] + \
+            [f for f in ordered if f.get("kind") in SUMMARY_KINDS]
         return d
 
 
@@ -66,14 +69,15 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 
-def precise_diff(old: Model, new: Model) -> PreciseDiff:
+def precise_diff(old: Model, new: Model, coarse: bool = False) -> PreciseDiff:
+    """coarse: a quick first look at two B-reps, not fit to report (see compare_breps)."""
     if _sha256(old.path) == _sha256(new.path):
         return PreciseDiff("byte-identical", 0.0, "the files are byte-for-byte identical", True)
 
     if old.kind == "brep" and new.kind == "brep":
         from theseus.diff.brep import compare_breps
 
-        result = compare_breps(old, new)
+        result = compare_breps(old, new, coarse=coarse)
     else:
         from theseus.diff.surface import compare_surfaces
 

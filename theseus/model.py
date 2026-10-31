@@ -22,6 +22,46 @@ class LoadError(Exception):
     pass
 
 
+def part_of(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """The part itself. STEP files also carry annotation and construction geometry (sheets, wires,
+    points for PMI): when there are solids, those are the part; failing that, its faces. The
+    annotation stays out of pictures and booleans, which it clutters and can even crash."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_SOLID
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS_Compound
+
+    for kind in (TopAbs_SOLID, TopAbs_FACE):
+        exp = TopExp_Explorer(shape, kind)
+        if exp.More():
+            compound = TopoDS_Compound()
+            builder = BRep_Builder()
+            builder.MakeCompound(compound)
+            while exp.More():
+                builder.Add(compound, exp.Current())
+                exp.Next()
+            return compound
+    return shape
+
+
+def skin_of(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """The part's faces, without the solid they enclose: a distance to this is a distance to its
+    surface, where a distance to a solid is zero for any point inside it."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopAbs import TopAbs_FACE
+    from OCP.TopExp import TopExp_Explorer
+    from OCP.TopoDS import TopoDS_Compound
+
+    compound = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(compound)
+    exp = TopExp_Explorer(part_of(shape), TopAbs_FACE)
+    while exp.More():
+        builder.Add(compound, exp.Current())
+        exp.Next()
+    return compound
+
+
 @dataclass
 class Model:
     path: str

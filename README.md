@@ -15,7 +15,7 @@ is never sent to an outside service.
 ```
 bracket.step (changed)
 - Geometry: 3 differences (exact B-rep; detection limit: geometry kernel precision (0.1 nm)):
-  - ① cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
+  - ① through hole along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm
   - ② 2 vertices moved, added or removed — largest 0.500 mm at (54.500, 25.000, 10.000)
   ...
 ```
@@ -29,8 +29,9 @@ Every PR comment starts with a summary of what changed, then one expandable sect
 
 | File | Result | Largest difference | What changed |
 |---|---|---|---|
-| `bracket.step` | **changed** | 0.500 mm | cylinder along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm |
+| `bracket.step` | **changed** | 0.500 mm | through hole along Z Ø8.000 at (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm |
 | `mount.step` | moved | — | moved +5.000 mm X, shape unchanged |
+| `arm-left.step` | **mirrored** | — | mirror image about XY, opposite hand |
 | `plate.step` | micro-change | 1.0 µm | plane x = 200.0000 → 200.0010 — +1.0 µm |
 | `housing.step` | identical | — | identical (re-export) |
 
@@ -70,6 +71,22 @@ it can't clash with anything else. `uv tool install theseus-cad` does the same, 
 `pip install theseus-cad` works too. During the beta, before the first PyPI release, install
 straight from GitHub instead: `pipx install git+https://github.com/arkapravopal04/theseus.git`.
 The download is large (~1.4 GB, mostly the OpenCascade geometry kernel and the VTK renderer).
+
+### Update
+
+Run `theseus --version` to see what you have, then the line that matches how you installed it:
+
+| You installed with | Update with |
+|---|---|
+| `pipx`, from GitHub | `pipx install --force git+https://github.com/arkapravopal04/theseus.git` |
+| `pip`, from GitHub | `python -m pip install --upgrade git+https://github.com/arkapravopal04/theseus.git` |
+| `pipx` or `pip`, from PyPI | `pipx upgrade theseus-cad` or `python -m pip install --upgrade theseus-cad` |
+| a clone of this repo | `git pull`, then `python -m pip install -e .` |
+| the GitHub Action, `@v1` | nothing: `@v1` follows the latest 1.x release |
+
+**If `theseus --version` says 0.1.0** (the package was called `theseus` back then), remove it first
+with `python -m pip uninstall theseus`, then install as above. Otherwise the old package stays
+installed alongside the new one, and its leftover files with it.
 
 ### 1. Compare two files (no git needed)
 
@@ -185,7 +202,7 @@ Optional inputs (`with:`):
 | `images` | `inline` | `inline`: images in the comment (needs `contents: write`); `artifact`: only in the run's artifact; `off`: text only |
 | `sensitivity` | `engineering` | When a difference counts as *changed* rather than a *micro-change*: `engineering` (10 µm or 0.1%), `fine` (1 µm or 0.01%), `exact` (anything above the detection limit) |
 | `units` | `mm` | Length unit of formats that don't record one (STL, OBJ, PLY, OFF, BREP): `mm`, `cm`, `m`, `in`, `ft`, `um` |
-| `timeout-seconds` | `300` | Time allowed to load one version of one file before it's skipped |
+| `timeout-seconds` | `600` | Time allowed for one file: loading, comparing and drawing. Past it you keep whatever finished: the text report if comparing did, otherwise a "skipped" line |
 | `max-file-mb` | `50` | Skip files larger than this |
 | `python-version` | `3.11` | 3.11 or newer |
 
@@ -209,7 +226,7 @@ free rotate/zoom viewer. Commands exit with status 2 if a file can't be read or 
 
 ## Beta
 
-theseus 1.1 is a beta. What's solid: reading every listed format, the precise geometric diff
+theseus 1.2 is a beta. What's solid: reading every listed format, the precise geometric diff
 and its detection limits, the images, moved-part detection, the 3D viewer, and the local
 commands, all covered by an automated test suite. What still needs real-world mileage:
 
@@ -245,7 +262,7 @@ Measured by the test suite (`tests/test_precision.py`), all detected and located
 | Change | Found as |
 |---|---|
 | one face of a 200 mm plate offset by 0.1 µm | `plane x = 200.00000 → 200.00010 — +0.1 µm` |
-| a Ø8 hole enlarged by 2 µm | `cylinder along Z Ø8.0000 → 8.0020 … — Ø +2.0 µm` |
+| a Ø8 hole enlarged by 2 µm | `through hole along Z Ø8.0000 → 8.0020 … — Ø +2.0 µm` |
 | a hole moved 0.5 mm sideways (volume unchanged) | `… (50.000, 25.000) → (50.500, 25.000) — axis moved 0.500 mm` |
 | the whole part rotated 0.01° | `plane y = 0.000 — tilted 0.01° (far edge moves 35.0 µm)` |
 | one STL vertex moved 1 µm | `surfaces differ by up to 1.0 µm near (…)` |
@@ -280,8 +297,11 @@ format, assumed mm").
    failed run. Exact formats are loaded with OpenCascade (`OCP`); meshes with `trimesh`.
 4. The geometry is compared face by face (or surface to surface for meshes — see
    [Precision](#precision)), alongside volume, area, bounding box and centre of mass. A part
-   whose volume, area and moments of inertia are unchanged is tested for a rigid move: the
-   old version, moved, must match the new one exactly before it's reported as "moved".
+   whose volume, area and moments of inertia are unchanged is tested for a rigid move, then a
+   mirror image: the old version, moved or reflected, must match the new one exactly before it's
+   reported that way. If neither fits and the part still looks moved as well as edited, the
+   versions are lined up first and the report says how. Holes and fillets are then
+   recognised, so a resized hole reads as one line rather than several faces.
 5. Images are rendered headless (VTK, on a private virtual display when there's no screen;
    a matplotlib fallback otherwise): added material in green, removed in red, or — for changes
    too small to see as material — a deviation map with a scale bar and a zoomed detail.
@@ -294,8 +314,19 @@ format, assumed mm").
 - **Meshes are only as precise as their triangles.** A coarse STL cuts corners on curved surfaces;
   changes smaller than that chord error can't be seen in it (the report's detection limit says
   how small that is for each file). Flat areas keep full float precision.
-- **Faces are compared, not features.** Reports name surfaces ("cylinder Ø8 along Z at …"),
-  not design intent ("M8 clearance hole") — there's no feature tree in an exchange file.
+- **Features are recognised from geometry, and only some of them.** There's no feature tree in an
+  exchange file. Holes (through, blind, counterbored, countersunk, stepped) and fillets get named on
+  exact B-reps; everything else, slots and pockets included, is reported face by face. Threads
+  can't be seen: a tapped hole is a plain bore in a STEP file. Meshes have no features. A feature
+  is only reported as changed if it's measurably off the other version.
+- **Annotation geometry isn't compared.** When a file has solids, those are the part: sheets, wires
+  and points (often PMI or construction geometry) only show as a count of open bodies. A real
+  surface body in a file that also has solids is treated the same way.
+- **Lining up is automatic and can decline.** A part moved or mirrored as well as edited is lined
+  up first, and the report says how. It only happens on exact B-reps of up to 3,000 vertices, when
+  at least 25% of vertices and 50% of analytic surface area then agree exactly and the part as it
+  sits fits clearly worse. A heavily edited or re-modelled part may not qualify, and is then
+  compared where it sits.
 - **Open geometry has no volume.** A mesh with holes or a surface-only STEP/IGES has no inside, so
   its volume and centre of mass are reported as n/a (with a warning) rather than a made-up number;
   the bounding box, area and previews still work. Inside-out mesh bodies are flipped and noted.

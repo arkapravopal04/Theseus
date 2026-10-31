@@ -19,11 +19,15 @@ from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
 from OCP.TopAbs import TopAbs_FACE, TopAbs_SHELL, TopAbs_SOLID
 from OCP.TopExp import TopExp_Explorer
-from OCP.TopoDS import TopoDS_Shape
+from OCP.TopoDS import TopoDS, TopoDS_Shape
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_Surface
+from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.GeomAbs import GeomAbs_Cone, GeomAbs_Cylinder, GeomAbs_Plane, GeomAbs_Sphere, GeomAbs_Torus
 
 import trimesh
 
-from theseus.model import Model
+from theseus.model import Model, part_of
 
 METRICS_SCHEMA = 2
 
@@ -31,6 +35,7 @@ METRICS_SCHEMA = 2
 # Requested relative accuracy of the volume integral. OCCT's adaptive integration reports the
 # error it actually achieved, which sets how small a volume change can be told from noise.
 VOLUME_EPS = 1e-9
+_EXACT_BOX_SURFACES = (GeomAbs_Plane, GeomAbs_Cylinder, GeomAbs_Cone, GeomAbs_Sphere, GeomAbs_Torus)
 
 
 def _volume_props(shape: TopoDS_Shape) -> tuple[GProp_GProps, float]:
@@ -54,9 +59,41 @@ def surface_area(shape: TopoDS_Shape) -> float:
 def bounding_box(shape: TopoDS_Shape) -> tuple[float, float, float, float, float, float]:
     box = Bnd_Box()
     # The geometry's own extent. The default Add_s pads the box by every sub-shape's tolerance,
-    # so a re-export with different tolerances would look like a size change.
-    BRepBndLib.AddOptimal_s(shape, box, False, False)
+    # so a re-export with different tolerances would look like a size change. Free-form faces are
+    # measured by their mesh: their box covers the whole surface a face was trimmed from, which
+    # can reach far outside the part.
+    # Solids only, when there are any: files also carry annotation and construction geometry.
+    deflection = None
+    for body in _unique_bodies(shape):
+        faces = TopExp_Explorer(body, TopAbs_FACE)
+        while faces.More():
+            face = TopoDS.Face(faces.Current())
+            faces.Next()
+            if BRep_Tool.Surface_s(face) is None:  # tessellated: triangles are all there is
+                BRepBndLib.AddOptimal_s(face, box, True, False)
+            elif BRepAdaptor_Surface(face, True).GetType() in _EXACT_BOX_SURFACES:
+                BRepBndLib.AddOptimal_s(face, box, False, False)
+            else:
+                if deflection is None:
+                    rough = Bnd_Box()
+                    BRepBndLib.Add_s(shape, rough)
+                    deflection = max(rough.CornerMin().Distance(rough.CornerMax()) * 1e-4, 1e-3)
+                BRepMesh_IncrementalMesh(face, deflection)
+                BRepBndLib.AddOptimal_s(face, box, True, False)
+    if box.IsVoid():
+        BRepBndLib.AddOptimal_s(shape, box, True, False)
+    if box.IsVoid():
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     return (box.GetXMin(), box.GetYMin(), box.GetZMin(), box.GetXMax(), box.GetYMax(), box.GetZMax())
+
+
+def _unique_bodies(shape: TopoDS_Shape) -> list:
+    """The solids, or if there are none, the whole shape."""
+    solids, exp = [], TopExp_Explorer(shape, TopAbs_SOLID)
+    while exp.More():
+        solids.append(exp.Current())
+        exp.Next()
+    return solids or [shape]
 
 
 def center_of_mass(shape: TopoDS_Shape) -> tuple[float, float, float]:
@@ -100,12 +137,13 @@ def _brep_metrics(model: Model) -> dict:
     if not solids:
         warnings.append("no closed solids (surface or wireframe geometry) — volume not applicable")
     elif open_bodies:
-        warnings.append(f"{open_bodies} open surface bod{'y' if open_bodies == 1 else 'ies'} excluded from volume")
+        warnings.append(f"{open_bodies} open surface bod{'y' if open_bodies == 1 else 'ies'} excluded from volume "
+                        "and from the comparison (often annotation geometry)")
 
     return {
         "volume_mm3": vol,
         "volume_rel_error": volume_error,
-        "area_mm2": surface_area(shape),
+        "area_mm2": surface_area(part_of(shape)),
         "bbox": bounding_box(shape),
         "com": com,
         "inertia": inertia,

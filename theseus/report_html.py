@@ -14,8 +14,8 @@ import theseus
 from theseus.compare import DEFAULT_THRESHOLDS, Section, Thresholds, file_section
 from theseus.fmt import fmt_len
 
-_ORDER = ["changed", "moved", "new", "deleted", "micro", "unchanged", "identical"]
-STATUS_LABEL = {"changed": "changed", "moved": "moved", "new": "new", "deleted": "deleted",
+_ORDER = ["changed", "mirrored", "moved", "new", "deleted", "micro", "unchanged", "identical"]
+STATUS_LABEL = {"changed": "changed", "mirrored": "mirrored", "moved": "moved", "new": "new", "deleted": "deleted",
           "micro": "micro-change", "unchanged": "no significant change", "identical": "identical"}
 
 
@@ -58,7 +58,9 @@ def _images(images: dict[str, str]) -> str:
 
 
 def _section(s: Section, images: dict[str, str]) -> str:
-    detail = s.suffix.strip(" —()")
+    detail = s.suffix.strip(" —")
+    if detail.startswith("(") and detail.endswith(")"):
+        detail = detail[1:-1]
     detail = "" if detail in (s.status, STATUS_LABEL[s.status]) else f'<p class="detail">{_inline(detail)}</p>'
     renamed = (f' <span class="detail">renamed from <code>{html.escape(s.old_path)}</code></span>'
                if s.old_path and s.old_path != s.path else "")
@@ -118,7 +120,7 @@ th {{ font-size:13px; color:var(--muted); font-weight:600; }}
 .file h2 {{ font-size:17px; margin:0 0 4px; word-break:break-all; }} .detail {{ color:var(--muted); margin:0 0 12px; }}
 .badge {{ display:inline-block; font-size:12px; font-weight:600; padding:2px 8px; border-radius:999px; color:#fff;
          background:var(--same); vertical-align:2px; }}
-.badge.changed {{ background:var(--changed); }} .badge.moved {{ background:var(--moved); }} .badge.new {{ background:var(--new); }}
+.badge.changed, .badge.mirrored {{ background:var(--changed); }} .badge.moved {{ background:var(--moved); }} .badge.new {{ background:var(--new); }}
 .badge.deleted {{ background:var(--deleted); }} .badge.micro {{ background:var(--micro); }}
 .images {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:12px; margin:8px 0; }}
 figure {{ margin:0; }} figure img {{ width:100%; border:1px solid var(--line); border-radius:8px; background:#fff; }}
